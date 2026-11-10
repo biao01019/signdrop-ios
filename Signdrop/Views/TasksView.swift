@@ -35,19 +35,8 @@ struct TasksView: View {
                         }
                         .padding(.horizontal, 20)
                     }
-                    Color.clear.frame(height: 110)
+                    Color.clear.frame(height: 130)
                 }
-            }
-        }
-        .overlay(alignment: .bottom) {
-            VStack(spacing: 10) {
-                FloatingTabBar(selection: $app.tab, items: [
-                    ("square.grid.2x2.fill", "应用"),
-                    ("checkmark.shield", "证书"),
-                    ("clock", "任务"),
-                    ("slider.horizontal.3", "设置"),
-                ])
-                HomeIndicator()
             }
         }
     }
