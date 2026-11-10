@@ -1,0 +1,43 @@
+name: Signdrop
+options:
+  bundleIdPrefix: com.signdrop
+  deploymentTarget:
+    iOS: "16.0"
+  createIntermediateGroups: true
+
+packages:
+  ZIPFoundation:
+    url: https://github.com/weichsel/ZIPFoundation
+    from: 0.9.19
+
+targets:
+  Signdrop:
+    type: application
+    platform: iOS
+    sources:
+      - Signdrop
+    dependencies:
+      - package: ZIPFoundation
+    info:
+      path: Signdrop/Info.plist
+      properties:
+        CFBundleDisplayName: Signdrop
+        CFBundleShortVersionString: "1.2.0"
+        CFBundleVersion: "156"
+        UILaunchScreen: {}
+        UISupportedInterfaceOrientations:
+          - UIInterfaceOrientationPortrait
+        UIApplicationSceneManifest:
+          UIApplicationSupportsMultipleScenes: false
+        UIUserInterfaceStyle: Light
+        LSSupportsOpeningDocumentsInPlace: true
+        NSPhotoLibraryAddUsageDescription: 保存签名后的 IPA 到文件。
+        ITSAppUsesNonExemptEncryption: false
+    settings:
+      base:
+        TARGETED_DEVICE_FAMILY: "1"
+        CODE_SIGN_STYLE: Manual
+        CODE_SIGN_IDENTITY: ""
+        CODE_SIGNING_REQUIRED: "NO"
+        SWIFT_VERSION: "5.9"
+        ENABLE_BITCODE: "NO"
