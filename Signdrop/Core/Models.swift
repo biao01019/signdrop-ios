@@ -70,7 +70,7 @@ final class AppState: ObservableObject {
     @Published var isLoggedIn: Bool = UserDefaults.standard.bool(forKey: "sd_logged_in")
     @Published var account: String = UserDefaults.standard.string(forKey: "sd_account") ?? ""
     @Published var tab: Int = 0
-    @Published var showLogin: Bool = !UserDefaults.standard.bool(forKey: "sd_logged_in")
+    @Published var showLogin: Bool = !UserDefaults.standard.bool(forKey: "sd_logged_in") && !UserDefaults.standard.bool(forKey: "sd_skipped_login")
 
     @Published var apps: [SignedApp] = [
         .init(name: "Quantum Notes", version: "2.4.1", build: "156", sizeMB: 24.6, category: "效率",
