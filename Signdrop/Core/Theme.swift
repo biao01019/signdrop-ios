@@ -11,7 +11,7 @@ extension Color {
     }
 
     static let bg = Color(hex: 0xF2F3F7)          // 页面背景
-    static let card = .white                       // 卡片
+    static let card = Color.white                       // 卡片
     static let sdBlue = Color(hex: 0x147AFF)     // 主蓝
     static let ink = Color(hex: 0x17181C)         // 主文字
     static let sub = Color(hex: 0x8A909C)         // 次级文字
@@ -85,9 +85,9 @@ struct Badge: View {
     }
     private var bg: Color {
         switch style {
-        case .green: return .sdGreenBg
-        case .orange: return .sdOrangeBg
-        case .red: return .sdRedBg
+        case .green: return .greenBg
+        case .orange: return .orangeBg
+        case .red: return .redBg
         case .blue: return .iconSq
         }
     }
@@ -152,7 +152,7 @@ struct AppIcon: View {
     var glyph: String // SF Symbol，白色
     var body: some View {
         RoundedRectangle(cornerRadius: corner)
-            .fill(LinearGradient(gradient, startPoint: .topLeading, endPoint: .bottomTrailing))
+            .fill(LinearGradient(colors: gradient.colors, startPoint: .topLeading, endPoint: .bottomTrailing))
             .frame(width: size, height: size)
             .overlay(
                 Image(systemName: glyph)
