@@ -9,6 +9,8 @@ struct CertificatesView: View {
     @State var importMessage: String? = nil
     @State var pendingP12: URL? = nil
     @State var p12Password: String = ""
+    @State var issuing = false
+    @State var issueLog: String?
 
     var body: some View {
         VStack(spacing: 0) {
@@ -43,6 +45,36 @@ struct CertificatesView: View {
                     }
                     .padding(.horizontal, 20)
                     .padding(.bottom, 16)
+
+                    Button {
+                        issueWithAppleID()
+                    } label: {
+                        HStack(spacing: 10) {
+                            if issuing {
+                                ProgressView().tint(.white).scaleEffect(0.9)
+                            } else {
+                                Image(systemName: "person.badge.key.fill")
+                                    .font(.system(size: 15, weight: .semibold))
+                            }
+                            Text(issuing ? "正在申请 7 天证书…" : "用 Apple ID 签发 7 天证书")
+                                .font(.system(size: 16, weight: .semibold))
+                        }
+                        .foregroundColor(.white)
+                        .frame(maxWidth: .infinity).frame(height: 60)
+                        .background(Color.sdBlue).cornerRadius(20)
+                    }
+                    .disabled(issuing)
+                    .padding(.horizontal, 20)
+                    .padding(.bottom, 12)
+
+                    if let log = issueLog {
+                        Text(log)
+                            .font(.system(size: 12))
+                            .foregroundColor(log.contains("完成") || log.contains("就绪") ? .sdGreen : .sub)
+                            .padding(.horizontal, 20)
+                            .padding(.bottom, 10)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                    }
 
                     if let m = importMessage {
                         Text(m).font(.system(size: 13)).foregroundColor(.sdBlue)
@@ -147,6 +179,47 @@ struct CertificatesView: View {
                     if i < app.devices.count - 1 {
                         Divider().background(Color.divider).padding(.leading, 72)
                     }
+                }
+            }
+        }
+    }
+
+    private func issueWithAppleID() {
+        guard AppleIDService.shared.session != nil else {
+            issueLog = "请先在登录页使用 Apple ID 登录（设置里可填 anisette 服务器）"
+            return
+        }
+        guard !AppleSigningFlow.shared.udid.isEmpty else {
+            issueLog = "请先在「设置 → 本机 UDID」填写设备 UDID"
+            return
+        }
+        issuing = true
+        issueLog = "开始申请证书…"
+
+        // 优先用第一个应用的 Bundle ID，没有则用通用 Demo ID
+        let bundle = app.apps.first?.bundleID ?? "com.signdrop.demoapp"
+        let name = app.apps.first?.name ?? "Signdrop App"
+
+        Task {
+            do {
+                let r = try await AppleSigningFlow.shared.provision(bundleId: bundle, appName: name) { msg in
+                    DispatchQueue.main.async { issueLog = msg }
+                }
+                // 同步证书卡片信息
+                DispatchQueue.main.async {
+                    issuing = false
+                    if let exp = r.expireDate {
+                        app.certs[0].expire = exp
+                        let days = Calendar.current.dateComponents([.day], from: Date(), to: exp).day ?? 0
+                        app.certs[0].daysLeft = max(0, days)
+                        app.certs[0].progress = max(0.05, min(1, Double(days) / 7.0))
+                    }
+                    issueLog = "证书已就绪（Team \(r.teamId)），可直接签名"
+                }
+            } catch {
+                DispatchQueue.main.async {
+                    issuing = false
+                    issueLog = error.localizedDescription
                 }
             }
         }
