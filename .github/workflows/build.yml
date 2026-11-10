@@ -18,14 +18,6 @@ jobs:
       - name: Install XcodeGen
         run: brew install xcodegen
 
-      - name: Download ldid (iOS arm64) into app bundle resources
-        run: |
-          mkdir -p Signdrop/Resources
-          curl -sL -o Signdrop/Resources/ldid \
-            https://github.com/ProcursusTeam/ldid/releases/download/v2.1.5-procursus7/ldid_iphoneos_arm64
-          chmod +x Signdrop/Resources/ldid
-          file Signdrop/Resources/ldid
-
       - name: Generate Xcode project
         run: xcodegen generate
 
@@ -49,10 +41,8 @@ jobs:
           echo "App: $APP"
           mkdir -p Payload
           cp -R "$APP" Payload/
-          # 内嵌 ldid 签名组件（App 内运行时调用）
-          cp Signdrop/Resources/ldid Payload/Signdrop.app/ldid
-          chmod +x Payload/Signdrop.app/ldid
-          ls -la Payload/Signdrop.app/
+          ls -la Payload/Signdrop.app/ | head -30
+          test -f Payload/Signdrop.app/AppleWWDRCAG4.cer && echo "WWDR G4 bundled" || echo "WARN: missing WWDR G4"
           zip -qry Signdrop.ipa Payload
           ls -la Signdrop.ipa
 
@@ -64,10 +54,10 @@ jobs:
 
       - name: Create release and upload IPA
         run: |
-          gh release view v1.4.0 2>/dev/null || \
-            gh release create v1.4.0 --title "Signdrop v1.4.0" \
+          gh release view v1.5.0 2>/dev/null || \
+            gh release create v1.5.0 --title "Signdrop v1.5.0" \
               --notes "Signdrop iOS 自签名工具 · 未签名 IPA（需用 Apple ID 通过 Sideloadly/AltStore 安装）" \
               --target $GITHUB_SHA
-          gh release upload v1.4.0 Signdrop.ipa --clobber
+          gh release upload v1.5.0 Signdrop.ipa --clobber
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
