@@ -31,6 +31,9 @@ struct RootView: View {
                 LoginView()
                     .environmentObject(app)
             }
+            .onAppear {
+                AppleIDService.shared.restoreIfPossible()
+            }
         }
     }
 }
