@@ -7,6 +7,9 @@ struct SignConfigView: View {
     @Environment(\.dismiss) var dismiss
     @StateObject private var engine = SigningEngine.shared
 
+    // 首页 + 号预导入的 IPA
+    var preImported: (name: String, sizeMB: Double)? = nil
+
     @State var importedIPA: (name: String, sizeMB: Double)? = nil
     @State var autoInstall = true
     @State var keepIcon = false
@@ -43,6 +46,9 @@ struct SignConfigView: View {
             }
         }
         .background(Color.bg)
+        .onAppear {
+            if importedIPA == nil { importedIPA = preImported }
+        }
         .fileImporter(isPresented: $showIPAImporter,
                       allowedContentTypes: [.data],
                       allowsMultipleSelection: false) { result in
