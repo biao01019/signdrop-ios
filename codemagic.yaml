@@ -1,0 +1,53 @@
+workflows:
+  ios-unsigned-ipa:
+    name: Signdrop IPA
+    instance_type: mac_mini_m2
+    max_build_duration: 60
+    environment:
+      xcode: latest
+      vars:
+        SCHEME: Signdrop
+    scripts:
+      - name: Install XcodeGen
+        script: |
+          brew install xcodegen || true
+          xcodegen --version
+
+      - name: Generate project
+        script: |
+          cd "$CM_BUILD_DIR"
+          xcodegen generate
+
+      - name: Build unsigned app
+        script: |
+          cd "$CM_BUILD_DIR"
+          set -o pipefail
+          xcodebuild -project Signdrop.xcodeproj \
+            -scheme "$SCHEME" \
+            -configuration Release \
+            -sdk iphoneos \
+            -destination 'generic/platform=iOS' \
+            -derivedDataPath build \
+            CODE_SIGNING_ALLOWED=NO CODE_SIGN_IDENTITY="" CODE_SIGN_ENTITLEMENTS="" \
+            build 2>&1 | tee build.log | tail -50
+          grep -q "BUILD SUCCEEDED" build.log
+
+      - name: Package IPA
+        script: |
+          cd "$CM_BUILD_DIR"
+          APP=$(find build/Build/Products/Release-iphoneos -maxdepth 1 -name "*.app" | head -1)
+          echo "App: $APP"
+          rm -rf Payload && mkdir -p Payload
+          cp -R "$APP" Payload/
+          ls -la Payload/Signdrop.app/ | head -20
+          zip -qry Signdrop.ipa Payload
+          ls -la Signdrop.ipa
+    artifacts:
+      - Signdrop.ipa
+    publishing:
+      email:
+        recipients:
+          - biao01019@users.noreply.github.com
+        notify:
+          success: true
+          failure: true
