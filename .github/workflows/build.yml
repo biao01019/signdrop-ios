@@ -64,10 +64,10 @@ jobs:
 
       - name: Create release and upload IPA
         run: |
-          gh release view v1.3.0 2>/dev/null || \
-            gh release create v1.3.0 --title "Signdrop v1.3.0" \
+          gh release view v1.4.0 2>/dev/null || \
+            gh release create v1.4.0 --title "Signdrop v1.4.0" \
               --notes "Signdrop iOS 自签名工具 · 未签名 IPA（需用 Apple ID 通过 Sideloadly/AltStore 安装）" \
               --target $GITHUB_SHA
-          gh release upload v1.3.0 Signdrop.ipa --clobber
+          gh release upload v1.4.0 Signdrop.ipa --clobber
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
