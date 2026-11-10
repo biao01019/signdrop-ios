@@ -1,0 +1,7 @@
+name: macos-latest
+on: workflow_dispatch
+jobs:
+  t:
+    runs-on: macos-latest
+    steps:
+      - run: sw_vers
