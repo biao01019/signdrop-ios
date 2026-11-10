@@ -158,6 +158,9 @@ struct AppRow: View {
 // MARK: 圆形小按钮
 struct CircleBtn: View {
     let icon: String
+
+    init(_ icon: String) { self.icon = icon }
+
     var body: some View {
         Image(systemName: icon)
             .font(.system(size: 15, weight: .semibold))
