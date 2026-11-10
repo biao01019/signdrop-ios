@@ -1,4 +1,5 @@
 import Foundation
+import Security
 
 /// 一键流程：Apple ID 已登录 → 注册设备 → 申请证书 → 创建 App ID/描述文件 → 交给签名引擎
 final class AppleSigningFlow {
@@ -6,11 +7,26 @@ final class AppleSigningFlow {
     static let shared = AppleSigningFlow()
 
     struct ProvisionResult {
-        var pemURL: URL
+        var certDER: Data
+        var keyTag: String
         var profileURL: URL
         var certId: String
         var teamId: String
         var expireDate: Date?
+
+        /// 转成签名器需要的身份（证书 + Keychain 私钥，全程进程内）
+        func identity() throws -> SigningEngine.Identity {
+            guard let cert = SecCertificateCreateWithData(nil, certDER as CFData) else {
+                throw SignError.apple("证书数据无效")
+            }
+            guard let key = CSRBuilder.loadPrivateKey(tag: keyTag) else {
+                throw SignError.apple("找不到密钥，请重新签发")
+            }
+            return SigningEngine.Identity(label: "Apple ID 开发证书",
+                                          certificate: cert,
+                                          privateKey: key,
+                                          teamID: teamId)
+        }
     }
 
     /// 设备 UDID（系统不开放给 App，需用户在设置里手动填一次）
@@ -74,15 +90,9 @@ final class AppleSigningFlow {
                                                            appIdId: appIdId, session: session)
         log("描述文件已下载（\(profileData.count / 1024) KB）")
 
-        // 6. 落盘 PEM（私钥 + 证书）与描述文件
-        let pemKey = try CSRBuilder.privateKeyPEM(tag: keyTag)
-        let pem = pemKey + "-----BEGIN CERTIFICATE-----\n"
-            + ASN1.base64Lines(cert.der) + "\n-----END CERTIFICATE-----\n"
+        // 6. 落盘描述文件（证书与私钥留在 Keychain / 内存，不落明文）
         let work = SigningEngine.workDir
         try? FileManager.default.createDirectory(at: work, withIntermediateDirectories: true)
-        let pemURL = work.appendingPathComponent("apple-identity.pem")
-        try pem.data(using: .utf8)?.write(to: pemURL)
-
         let profileURL = work.appendingPathComponent("apple-embedded.mobileprovision")
         try profileData.write(to: profileURL)
 
@@ -94,7 +104,7 @@ final class AppleSigningFlow {
         }
         log("完成，可开始签名")
 
-        return ProvisionResult(pemURL: pemURL, profileURL: profileURL,
+        return ProvisionResult(certDER: cert.der, keyTag: keyTag, profileURL: profileURL,
                                certId: cert.id, teamId: team.id, expireDate: expire)
     }
 }
