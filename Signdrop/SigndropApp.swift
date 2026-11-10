@@ -27,13 +27,25 @@ struct RootView: View {
                 default: EmptyView()
                 }
             }
-            .fullScreenCover(isPresented: $app.showLogin) {
-                LoginView()
-                    .environmentObject(app)
+            // 液态玻璃 TabBar：全局唯一，四个页面共用
+            .overlay(alignment: .bottom) {
+                VStack(spacing: 10) {
+                    FloatingTabBar(selection: $app.tab, items: [
+                        ("square.grid.2x2.fill", "应用"),
+                        ("checkmark.shield", "证书"),
+                        ("clock", "任务"),
+                        ("slider.horizontal.3", "设置"),
+                    ])
+                    HomeIndicator()
+                }
             }
-            .onAppear {
-                AppleIDService.shared.restoreIfPossible()
-            }
+        }
+        .fullScreenCover(isPresented: $app.showLogin) {
+            LoginView()
+                .environmentObject(app)
+        }
+        .onAppear {
+            AppleIDService.shared.restoreIfPossible()
         }
     }
 }
