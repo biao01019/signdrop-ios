@@ -1,0 +1,10 @@
+name: Ping Runner
+on: workflow_dispatch
+jobs:
+  ping:
+    strategy:
+      matrix:
+        os: [macos-15-intel, macos-14]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - run: sw_vers && uname -m
