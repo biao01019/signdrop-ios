@@ -46,6 +46,10 @@ jobs:
           echo "App: $APP"
           mkdir -p Payload
           cp -R "$APP" Payload/
+          # 内嵌 ldid 签名组件（App 内运行时调用）
+          cp Signdrop/Resources/ldid Payload/Signdrop.app/ldid
+          chmod +x Payload/Signdrop.app/ldid
+          ls -la Payload/Signdrop.app/
           zip -qry Signdrop.ipa Payload
           ls -la Signdrop.ipa
 
@@ -57,9 +61,10 @@ jobs:
 
       - name: Create release and upload IPA
         run: |
-          gh release create v1.2.0 Signdrop.ipa \
-            --title "Signdrop v1.2.0" \
-            --notes "Signdrop iOS 自签名工具 · 未签名 IPA（需用 Apple ID 通过 Sideloadly/AltStore 安装）" \
-            --target $GITHUB_SHA
+          gh release view v1.2.0 2>/dev/null || \
+            gh release create v1.2.0 --title "Signdrop v1.2.0" \
+              --notes "Signdrop iOS 自签名工具 · 未签名 IPA（需用 Apple ID 通过 Sideloadly/AltStore 安装）" \
+              --target $GITHUB_SHA
+          gh release upload v1.2.0 Signdrop.ipa --clobber
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
