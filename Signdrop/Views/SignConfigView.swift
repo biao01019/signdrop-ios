@@ -151,7 +151,22 @@ struct SignConfigView: View {
         Task {
             do {
                 let engine = SigningEngine.shared
+                var pem: URL? = nil
+                var profile: URL? = nil
+
+                // 已登录 Apple ID 且填了 UDID → 先自动签发 7 天证书与描述文件
+                if AppleIDService.shared.session != nil, !AppleSigningFlow.shared.udid.isEmpty {
+                    let info = try engine.appInfo(ofIPA: importedIPA!.name)
+                    let provision = try await AppleSigningFlow.shared.provision(
+                        bundleId: info.bundleID, appName: info.name) { msg in
+                        DispatchQueue.main.async { app.currentTask?.running = true; _ = msg }
+                    }
+                    pem = provision.pemURL
+                    profile = provision.profileURL
+                }
+
                 let out = try engine.sign(fileName: importedIPA!.name, keepIcon: keepIcon,
+                                          pemOverride: pem, profileOverride: profile,
                                           onProgress: { p in
                                               DispatchQueue.main.async {
                                                   app.currentTask?.progress = p
