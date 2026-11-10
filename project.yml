@@ -18,7 +18,11 @@ targets:
     type: application
     platform: iOS
     sources:
-      - Signdrop
+      - path: Signdrop
+        excludes:
+          - Resources
+      - path: Signdrop/Resources
+        buildPhase: resources
     dependencies:
       - package: ZIPFoundation
       - package: BigInt
@@ -26,8 +30,8 @@ targets:
       path: Signdrop/Info.plist
       properties:
         CFBundleDisplayName: Signdrop
-        CFBundleShortVersionString: "1.4.0"
-        CFBundleVersion: "180"
+        CFBundleShortVersionString: "1.5.0"
+        CFBundleVersion: "190"
         UILaunchScreen: {}
         UISupportedInterfaceOrientations:
           - UIInterfaceOrientationPortrait
@@ -35,6 +39,7 @@ targets:
           UIApplicationSupportsMultipleScenes: false
         UIUserInterfaceStyle: Light
         LSSupportsOpeningDocumentsInPlace: true
+        UIFileSharingEnabled: true
         NSPhotoLibraryAddUsageDescription: 保存签名后的 IPA 到文件。
         ITSAppUsesNonExemptEncryption: false
     settings:
@@ -46,4 +51,4 @@ targets:
         SWIFT_VERSION: "5.9"
         ENABLE_BITCODE: "NO"
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
-        CURRENT_PROJECT_VERSION: "180"
+        CURRENT_PROJECT_VERSION: "190"
