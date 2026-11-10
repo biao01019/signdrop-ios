@@ -46,7 +46,12 @@ enum CSRBuilder {
 
     /// 生成 CSR（DER）
     static func makeCSR(commonName: String, teamId: String, keyTag: String) throws -> (der: Data, keyTag: String) {
-        let key = loadPrivateKey(tag: keyTag) ?? (try generatePrivateKey(tag: keyTag))
+        let key: SecKey
+        if let existing = loadPrivateKey(tag: keyTag) {
+            key = existing
+        } else {
+            key = try generatePrivateKey(tag: keyTag)
+        }
         guard let pub = SecKeyCopyPublicKey(key),
               let pubRaw = SecKeyCopyExternalRepresentation(pub, nil) as Data? else {
             throw SignError.apple("获取公钥失败")
