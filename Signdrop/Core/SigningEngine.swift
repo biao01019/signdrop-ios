@@ -1,17 +1,20 @@
 import Foundation
 import Security
+import CryptoKit
 import ZIPFoundation
 
-// MARK: - 签名引擎：IPA 解压 → 注入描述文件 → ldid 重签名 → 重新打包
+// MARK: - 签名引擎
+/// 全程在 App 进程内完成：解压 → 注入描述文件 → 逐层 Mach-O 重签名 → 打包为合法 IPA
+/// 不执行任何外部二进制（iOS 沙盒禁止），也不依赖网络。
 final class SigningEngine: ObservableObject {
 
     static let shared = SigningEngine()
 
-    /// Documents 目录结构
-    static var importsDir: URL  { dir("Imports") }
-    static var workDir: URL     { dir("Work") }
-    static var signedDir: URL   { dir("Signed") }
-    static var certsDir: URL    { dir("Certs") }
+    // MARK: 目录
+    static var importsDir: URL { dir("Imports") }
+    static var workDir: URL    { dir("Work") }
+    static var signedDir: URL  { dir("Signed") }
+    static var certsDir: URL   { dir("Certs") }
 
     private static func dir(_ name: String) -> URL {
         let u = FileManager.default.documentsURL.appendingPathComponent(name, isDirectory: true)
@@ -19,161 +22,401 @@ final class SigningEngine: ObservableObject {
         return u
     }
 
-    // MARK: 导入 IPA
-    @discardableResult
-    func importIPA(from url: URL) throws -> (name: String, sizeMB: Double) {
-        let dst = Self.importsDir.appendingPathComponent(url.lastPathComponent)
-        if dst != url {
-            try? FileManager.default.removeItem(at: dst)
-            try FileManager.default.copyItem(at: url, to: dst)
-        }
-        let size = (try? FileManager.default.attributesOfItem(atPath: dst.path)[.size] as? Double) ?? 0
-        return (url.lastPathComponent, (size / 1024 / 1024 * 10).rounded() / 10)
+    // MARK: 模型
+    struct Identity {
+        var label: String
+        var certificate: SecCertificate
+        var privateKey: SecKey
+        var teamID: String?
     }
 
-    // MARK: 导入 .p12 证书 + 描述文件
+    struct SignOutput {
+        var ipaURL: URL
+        var appName: String
+        var bundleID: String
+        var isAdHoc: Bool
+        var warnings: [String]
+    }
+
+    // MARK: - 导入 IPA（真正复制进沙盒）
+    @discardableResult
+    func importIPA(from url: URL) throws -> (name: String, sizeMB: Double) {
+        let name = url.lastPathComponent
+        guard name.lowercased().hasSuffix(".ipa") else { throw SignError.notIPA }
+
+        let scoped = url.startAccessingSecurityScopedResource()
+        defer { if scoped { url.stopAccessingSecurityScopedResource() } }
+
+        let fm = FileManager.default
+        let dst = Self.importsDir.appendingPathComponent(name)
+        if dst.standardizedFileURL != url.standardizedFileURL {
+            try? fm.removeItem(at: dst)
+            do {
+                try fm.copyItem(at: url, to: dst)
+            } catch {
+                // iCloud 未下载时先取到本地再复制
+                let tmp = fm.temporaryDirectory.appendingPathComponent(name)
+                try? fm.removeItem(at: tmp)
+                try fm.copyItem(at: url, to: tmp)
+                try? fm.removeItem(at: dst)
+                try fm.copyItem(at: tmp, to: dst)
+                try? fm.removeItem(at: tmp)
+            }
+        }
+        let attrs = (try? fm.attributesOfItem(atPath: dst.path)) ?? [:]
+        let size = ((attrs[.size] as? NSNumber)?.doubleValue ?? 0) / 1024 / 1024
+        guard size > 0 else { throw SignError.notIPA }
+        return (name, (size * 10).rounded() / 10)
+    }
+
+    /// 已导入的 IPA 列表（含通过「文件」App 拖入的）
+    func importedIPAs() -> [(name: String, sizeMB: Double)] {
+        let fm = FileManager.default
+        let items = (try? fm.contentsOfDirectory(at: Self.importsDir, includingPropertiesForKeys: [.fileSizeKey])) ?? []
+        return items
+            .filter { $0.pathExtension.lowercased() == "ipa" }
+            .compactMap { u in
+                let size = ((try? u.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0)
+                guard size > 0 else { return nil }
+                return (u.lastPathComponent, (Double(size) / 1024 / 1024 * 10).rounded() / 10)
+            }
+            .sorted { $0.0 < $1.0 }
+    }
+
+    // MARK: - 证书
     func importP12(from url: URL, password: String) throws {
+        let scoped = url.startAccessingSecurityScopedResource()
+        defer { if scoped { url.stopAccessingSecurityScopedResource() } }
         let dst = Self.certsDir.appendingPathComponent("identity.p12")
         try? FileManager.default.removeItem(at: dst)
         try FileManager.default.copyItem(at: url, to: dst)
-        try KeychainStore.save(password, forKey: "sd_p12_pass")
+        KeychainStore.save(password, forKey: "sd_p12_pass")
+        // 立即校验一次，密码错误当场报出来
+        _ = try loadIdentity()
     }
 
     func importProfile(from url: URL) throws {
+        let scoped = url.startAccessingSecurityScopedResource()
+        defer { if scoped { url.stopAccessingSecurityScopedResource() } }
         let dst = Self.certsDir.appendingPathComponent("embedded.mobileprovision")
         try? FileManager.default.removeItem(at: dst)
         try FileManager.default.copyItem(at: url, to: dst)
+        _ = try extractProfilePlist(at: dst)
     }
 
-    var hasProfile: Bool { FileManager.default.fileExists(atPath: Self.certsDir.appendingPathComponent("embedded.mobileprovision").path) }
-    var hasP12: Bool { FileManager.default.fileExists(atPath: Self.certsDir.appendingPathComponent("identity.p12").path) }
+    var hasProfile: Bool {
+        FileManager.default.fileExists(atPath: Self.certsDir.appendingPathComponent("embedded.mobileprovision").path)
+    }
+    var hasP12: Bool {
+        FileManager.default.fileExists(atPath: Self.certsDir.appendingPathComponent("identity.p12").path)
+    }
 
-    // MARK: 从 .mobileprovision 提取 plist（CMS 包裹，直接定位 XML）
+    var profileURL: URL { Self.certsDir.appendingPathComponent("embedded.mobileprovision") }
+
+    /// 从已导入的 p12 取签名身份
+    func loadIdentity() throws -> Identity {
+        let p12URL = Self.certsDir.appendingPathComponent("identity.p12")
+        guard FileManager.default.fileExists(atPath: p12URL.path) else { throw SignError.noP12 }
+        let data = try Data(contentsOf: p12URL)
+        let password = KeychainStore.load(forKey: "sd_p12_pass") ?? ""
+        var items: CFArray?
+        let opts: [String: Any] = [kSecImportExportPassphrase as String: password]
+        let status = SecPKCS12Import(data as CFData, opts as CFDictionary, &items)
+        guard status == errSecSuccess,
+              let arr = items as? [[String: Any]],
+              let dict = arr.first,
+              let identity = dict[kSecImportItemIdentity as String] as! SecIdentity? else {
+            throw SignError.badP12
+        }
+        var cert: SecCertificate?
+        SecIdentityCopyCertificate(identity, &cert)
+        var key: SecKey?
+        SecIdentityCopyPrivateKey(identity, &key)
+        guard let cert, let key else { throw SignError.badP12 }
+
+        var team: String?
+        if let values = SecCertificateCopyValues(cert, [kSecOIDOrganizationalUnitName] as CFArray, nil) as? [String: Any],
+           let ou = values[kSecOIDOrganizationalUnitName as String] as? [String: Any],
+           let arr = ou[kSecPropertyKeyValue as String] as? [Any] {
+            team = arr.first as? String
+        }
+        let cn = (SecCertificateCopySubjectSummary(cert) as String?) ?? "导入证书"
+        return Identity(label: cn, certificate: cert, privateKey: key, teamID: team)
+    }
+
+    /// 证书链上需要的中间证书（p12 里通常没有，必须随 CMS 提供）
+    func intermediateCertificates() -> [SecCertificate] {
+        var out: [SecCertificate] = []
+        for name in ["AppleWWDRCAG4", "AppleWWDRCAG3"] {
+            guard let url = Bundle.main.url(forResource: name, withExtension: "cer"),
+                  let data = try? Data(contentsOf: url),
+                  let c = SecCertificateCreateWithData(nil, data as CFData) else { continue }
+            out.append(c)
+        }
+        return out
+    }
+
+    // MARK: - 描述文件
     func extractProfilePlist(at url: URL? = nil) throws -> [String: Any] {
-        let data = try Data(contentsOf: url ?? Self.certsDir.appendingPathComponent("embedded.mobileprovision"))
+        let target = url ?? profileURL
+        let data: Data
+        do { data = try Data(contentsOf: target) } catch { throw SignError.noProfile }
+        // 兼容裸 plist 与 CMS 包裹
+        if let plist = try? PropertyListSerialization.propertyList(from: data, format: nil),
+           let dict = plist as? [String: Any], dict["Entitlements"] != nil {
+            return dict
+        }
         guard let xml = data.xmlPlistRange() else { throw SignError.badProfile }
         let plist = try PropertyListSerialization.propertyList(from: xml, format: nil)
         guard let dict = plist as? [String: Any] else { throw SignError.badProfile }
         return dict
     }
 
-    /// 从描述文件生成 entitlements XML
-    func writeEntitlements(from profile: [String: Any], to url: URL) throws {
-        guard let ents = profile["Entitlements"] as? [String: Any] else { throw SignError.noEntitlements }
+    func writeEntitlements(from profile: [String: Any], bundleID: String, teamID: String?, to url: URL) throws {
+        guard var ents = profile["Entitlements"] as? [String: Any] else { throw SignError.noEntitlements }
+        if let team = teamID ?? (profile["TeamIdentifier"] as? [String])?.first {
+            ents["application-identifier"] = "\(team).\(bundleID)"
+            if var groups = ents["keychain-access-groups"] as? [String], !groups.isEmpty {
+                groups[0] = "\(team).\(bundleID)"
+                ents["keychain-access-groups"] = groups
+            }
+        }
         let data = try PropertyListSerialization.data(fromPropertyList: ents, format: .xml, options: 0)
         try data.write(to: url)
     }
 
-    // MARK: p12 → PEM（私钥 + 证书），供 ldid 使用
-    func exportPEM() throws -> URL {
-        let p12URL = Self.certsDir.appendingPathComponent("identity.p12")
-        let data = try Data(contentsOf: p12URL)
-        let options: [String: Any] = [
-            kSecImportExportPassphrase as String: KeychainStore.load(forKey: "sd_p12_pass") ?? ""
-        ]
-        var items: CFArray?
-        let status = SecPKCS12Import(data as CFData, options as CFDictionary, &items)
-        guard status == errSecSuccess, let arr = items as? [[String: Any]], let first = arr.first,
-              let identity = first[kSecImportItemIdentity as String] as! SecIdentity? else {
-            throw SignError.badP12
-        }        // 证书 → PEM
-        var cert: SecCertificate?
-        SecIdentityCopyCertificate(identity, &cert)
-        guard let cert else { throw SignError.badP12 }
-        let certData = SecCertificateCopyData(cert) as Data
-        var pem = "-----BEGIN CERTIFICATE-----\n"
-        pem += base64Lines(certData)
-        pem += "\n-----END CERTIFICATE-----\n"
-        // 私钥 → PKCS#8 PEM
-        var key: SecKey?
-        SecIdentityCopyPrivateKey(identity, &key)
-        guard let key else { throw SignError.badP12 }
-        guard let keyData0 = SecKeyCopyExternalRepresentation(key, nil) as Data? else { throw SignError.badP12 }
-        var keyData = keyData0
-        let attrs = SecKeyCopyAttributes(key) as? [String: Any]
-        let keyTypeRaw = attrs?[kSecAttrKeyType as String] as? String ?? ""
-        if keyTypeRaw == (kSecAttrKeyTypeECSECPrimeRandom as String) {
-            // SEC1 → 包一层 EC PRIVATE KEY（ldid 兼容 PEM EC）
-            pem += sec1ToPEM(keyData)
+    // MARK: - 主流程
+    func sign(fileName: String,
+              keepIcon: Bool = true,
+              identity: Identity?,
+              profileOverride: URL? = nil,
+              onProgress: @escaping (Double) -> Void,
+              onStep: @escaping (SignStep, Bool) -> Void,
+              onLog: @escaping (String) -> Void = { _ in }) throws -> SignOutput {
+
+        let fm = FileManager.default
+        let work = Self.workDir
+        try? fm.removeItem(at: work)
+        try fm.createDirectory(at: work, withIntermediateDirectories: true)
+        defer { try? fm.removeItem(at: work) }
+
+        var warnings: [String] = []
+
+        // ---- 1. 解压 ----
+        let ipaURL = Self.importsDir.appendingPathComponent(fileName)
+        guard fm.fileExists(atPath: ipaURL.path) else { throw SignError.fileMissing(fileName) }
+        onStep(.unzip, false)
+        onLog("解压 \(fileName)…")
+        try fm.unzipItem(at: ipaURL, to: work)
+        onStep(.unzip, true)
+        onProgress(0.12)
+
+        // ---- 2. 定位 .app ----
+        guard let payload = try? fm.contentsOfDirectory(at: work, includingPropertiesForKeys: nil)
+                .first(where: { $0.lastPathComponent.lowercased() == "payload" }),
+              let appURL = try? fm.contentsOfDirectory(at: payload, includingPropertiesForKeys: nil)
+                .first(where: { $0.pathExtension.lowercased() == "app" }) else {
+            throw SignError.noAppBundle
+        }
+        let infoURL = appURL.appendingPathComponent("Info.plist")
+        guard var info = (try? PropertyListSerialization.propertyList(from: Data(contentsOf: infoURL), format: nil)) as? [String: Any] else {
+            throw SignError.noAppBundle
+        }
+        var bundleID = info["CFBundleIdentifier"] as? String ?? "com.signdrop.unknown"
+        var appName = (info["CFBundleDisplayName"] as? String)
+            ?? (info["CFBundleName"] as? String)
+            ?? appURL.deletingPathExtension().lastPathComponent
+        onLog("应用：\(appName)（\(bundleID)）")
+        onProgress(0.2)
+
+        // ---- 3. 描述文件 / Entitlements ----
+        onStep(.verify, false)
+        let pURL = profileOverride ?? profileURL
+        var entitlementsData: Data?
+        var teamID = identity?.teamID
+
+        if fm.fileExists(atPath: pURL.path) {
+            let profile = try extractProfilePlist(at: pURL)
+            if teamID == nil { teamID = (profile["TeamIdentifier"] as? [String])?.first }
+            if let appID = profile["application-identifier"] as? String,
+               let dot = appID.firstIndex(of: ".") {
+                let suffix = String(appID[appID.index(after: dot)...])
+                if !suffix.isEmpty, !suffix.contains("*"), suffix != bundleID {
+                    bundleID = suffix
+                    onLog("Bundle ID 对齐描述文件：\(bundleID)")
+                }
+            }
+            let entURL = work.appendingPathComponent("entitlements.plist")
+            try writeEntitlements(from: profile, bundleID: bundleID, teamID: teamID, to: entURL)
+            entitlementsData = try Data(contentsOf: entURL)
+            onLog("描述文件就绪（Team \(teamID ?? "?")）")
+        } else if identity != nil {
+            throw SignError.noProfile
         } else {
-            // RSA: SecKeyCopyExternalRepresentation 返回 PKCS#1，包成 PKCS#8
-            keyData = pkcs1ToPKCS8(keyData)
-            pem += "-----BEGIN PRIVATE KEY-----\n"
-            pem += base64Lines(keyData)
-            pem += "\n-----END PRIVATE KEY-----\n"
+            onLog("未提供描述文件 → 使用 ad-hoc 签名（TrollStore / 越狱设备可用）")
         }
-        let out = Self.workDir.appendingPathComponent("identity.pem")
-        try pem.data(using: .utf8)!.write(to: out)
-        return out
-    }
 
-    private func base64Lines(_ d: Data) -> String {
-        let b64 = d.base64EncodedString()
-        var lines: [String] = []
-        var i = b64.startIndex
-        while i < b64.endIndex {
-            let e = b64.index(i, offsetBy: 64, limitedBy: b64.endIndex) ?? b64.endIndex
-            lines.append(String(b64[i..<e]))
-            i = e
+        // ---- 4. 写入 Info.plist 与描述文件 ----
+        info["CFBundleIdentifier"] = bundleID
+        info.removeValue(forKey: "CFBundleResourceSpecification")
+        if !keepIcon { info["CFBundleIconName"] = nil }
+        let newInfo = try PropertyListSerialization.data(fromPropertyList: info, format: .binary, options: 0)
+        try newInfo.write(to: infoURL)
+        let infoForHash = newInfo
+
+        if entitlementsData != nil {
+            let embedded = appURL.appendingPathComponent("embedded.mobileprovision")
+            try? fm.removeItem(at: embedded)
+            try fm.copyItem(at: pURL, to: embedded)
         }
-        return lines.joined(separator: "\n")
+        onStep(.verify, true)
+        onProgress(0.3)
+
+        // ---- 5. 清掉旧签名 ----
+        var oldSignatures: [URL] = []
+        if let en = fm.enumerator(at: appURL, includingPropertiesForKeys: nil) {
+            for case let u as URL in en where u.lastPathComponent == "_CodeSignature" {
+                oldSignatures.append(u)
+            }
+        }
+        for u in oldSignatures { try? fm.removeItem(at: u) }
+        if !oldSignatures.isEmpty { onLog("已清理 \(oldSignatures.count) 个旧签名目录") }
+
+        // ---- 6. 逐层重签名 ----
+        onStep(.resign, false)
+        let mainBinaryName = info["CFBundleExecutable"] as? String
+            ?? appURL.deletingPathExtension().lastPathComponent
+        let mainBinary = appURL.appendingPathComponent(mainBinaryName)
+
+        var machOFiles: [URL] = []
+        if let en = fm.enumerator(at: appURL, includingPropertiesForKeys: [.isRegularFileKey]) {
+            for case let u as URL in en {
+                let isFile = (try? u.resourceValues(forKeys: [.isRegularFileKey]).isRegularFile) ?? false
+                guard isFile, u.path != mainBinary.path else { continue }
+                if MachOSigner.isMachO(u) { machOFiles.append(u) }
+            }
+        }
+        // 深的先签（framework / dylib / appex 先于外层）
+        machOFiles.sort { $0.pathComponents.count > $1.pathComponents.count }
+
+        let signer = identity.map { CodeSignCMS.Signer(certificate: $0.certificate, privateKey: $0.privateKey) }
+        let extraCerts = intermediateCertificates()
+
+        for file in machOFiles {
+            let rel = file.path.replacingOccurrences(of: appURL.path + "/", with: "")
+            var identifier = bundleID + "." + file.lastPathComponent
+            if let range = rel.range(of: ".framework/") {
+                identifier = String(rel[rel.startIndex..<range.lowerBound]).components(separatedBy: "/").last ?? identifier
+            } else if rel.contains(".appex/") {
+                identifier = bundleID + ".appex"
+            } else if file.pathExtension.lowercased() == "dylib" {
+                identifier = file.deletingPathExtension().lastPathComponent
+            }
+            let isAppexBinary = rel.contains(".appex/") && !rel.contains(".appex/Frameworks/")
+            do {
+                try MachOSigner.sign(fileAt: file,
+                                     options: .init(identifier: identifier,
+                                                    entitlements: isAppexBinary ? entitlementsData : nil,
+                                                    signer: signer,
+                                                    extraCertificates: extraCerts,
+                                                    isMainExecutable: false,
+                                                    teamIdentifier: teamID),
+                                     infoPlist: nil)
+            } catch {
+                warnings.append("跳过 \(rel)：\(error.localizedDescription)")
+            }
+        }
+        onProgress(0.55)
+
+        // 主二进制
+        do {
+            try MachOSigner.sign(fileAt: mainBinary,
+                                 options: .init(identifier: bundleID,
+                                                entitlements: entitlementsData,
+                                                signer: signer,
+                                                extraCertificates: extraCerts,
+                                                isMainExecutable: true,
+                                                teamIdentifier: teamID),
+                                 infoPlist: infoForHash)
+            onLog("主二进制已签名（\(signer == nil ? "ad-hoc" : "证书")）")
+        } catch {
+            throw SignError.signFailed(error.localizedDescription)
+        }
+        onStep(.resign, true)
+        onProgress(0.8)
+
+        // ---- 7. 打包 ----
+        onStep(.pack, false)
+        let base = fileName.replacingOccurrences(of: ".ipa", with: "", options: .caseInsensitive)
+        let out = Self.signedDir.appendingPathComponent("\(base)-signed.ipa")
+        try writeIPA(payloadDir: payload, to: out)
+        onLog("已打包：\(out.lastPathComponent)（\((fileSize(out) / 1024 / 1024 * 10).rounded() / 10) MB）")
+        onStep(.pack, true)
+        onProgress(1.0)
+
+        return SignOutput(ipaURL: out, appName: appName, bundleID: bundleID,
+                          isAdHoc: signer == nil, warnings: warnings)
     }
 
-    /// RSA PKCS#1 → PKCS#8（手工拼 ASN.1 头）
-    private func pkcs1ToPKCS8(_ pkcs1: Data) -> Data {
-        let pkcs1Len = asn1LenBytes(pkcs1.count)
-        let total = pkcs1.count + pkcs1Len.count + 9 // 0x30 tag + len + 15-byte AlgorithmIdentifier minus 6... simplified
-        let header: [UInt8] = [0x30] + asn1LenBytes(total + 11) +
-            [0x30, 0x0D, 0x06, 0x09, 0x2A, 0x86, 0x48, 0x86, 0xF7, 0x0D, 0x01, 0x01, 0x01, 0x05, 0x00, 0x04] +
-            asn1LenBytes(pkcs1.count)
-        var out = Data(header)
-        out.append(pkcs1)
-        return out
+    private func fileSize(_ url: URL) -> Double {
+        guard let attrs = try? FileManager.default.attributesOfItem(atPath: url.path),
+              let n = attrs[.size] as? NSNumber else { return 0 }
+        return n.doubleValue
     }
 
-    /// EC SEC1 raw → PEM
-    private func sec1ToPEM(_ raw: Data) -> String {
-        var s = "-----BEGIN EC PRIVATE KEY-----\n"
-        s += base64Lines(raw)
-        s += "\n-----END EC PRIVATE KEY-----\n"
-        return s
+    // MARK: - 打包为合法 IPA（顶层 Payload/，权限 755）
+    func writeIPA(payloadDir: URL, to out: URL) throws {
+        let fm = FileManager.default
+        try? fm.removeItem(at: out)
+        let archive = try Archive(url: out, accessMode: .create)
+
+        struct Item { let path: String; let url: URL; let isDir: Bool }
+        var items: [Item] = [Item(path: "Payload", url: payloadDir, isDir: true)]
+        if let en = fm.enumerator(at: payloadDir, includingPropertiesForKeys: [.isDirectoryKey]) {
+            for case let u as URL in en {
+                let isDir = (try? u.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) ?? false
+                let rel = u.path.replacingOccurrences(of: payloadDir.path + "/", with: "")
+                items.append(Item(path: "Payload/" + rel, url: u, isDir: isDir))
+            }
+        }
+
+        for item in items {
+            if item.isDir {
+                try archive.addEntry(with: item.path + "/", type: .directory,
+                                     uncompressedSize: 0, modificationDate: Date(),
+                                     permissions: 0o755, compressionMethod: .none,
+                                     bufferSize: 4096, progress: nil) { _, _ in Data() }
+            } else {
+                let attrs = (try? fm.attributesOfItem(atPath: item.url.path)) ?? [:]
+                let size = (attrs[.size] as? NSNumber)?.int64Value ?? 0
+                let perms: UInt16 = MachOSigner.isMachO(item.url) ? 0o755 : 0o644
+                try archive.addEntry(with: item.path, type: .file,
+                                     uncompressedSize: size, modificationDate: Date(),
+                                     permissions: perms, compressionMethod: .deflate,
+                                     bufferSize: 1 << 20, progress: nil) { position, length in
+                    guard let h = try? FileHandle(forReadingFrom: item.url) else { return Data() }
+                    defer { try? h.close() }
+                    try? h.seek(toOffset: UInt64(position))
+                    return h.readData(ofLength: length)
+                }
+            }
+        }
     }
 
-    private func asn1LenBytes(_ n: Int) -> [UInt8] {
-        if n < 0x80 { return [UInt8(n)] }
-        let bytes = withUnsafeBytes(of: UInt16(n).bigEndian) { Array($0).filter { $0 != 0 } }
-        return [UInt8(0x80 + bytes.count)] + bytes
-    }
-
-    // MARK: posix_spawn 执行 ldid
-    @discardableResult
-    func runBinary(at path: String, args: [String]) throws -> Int32 {
-        chmod(path, 0o755)
-        var argv: [UnsafeMutablePointer<CChar>?] = [strdup(path)] + args.map { strdup($0) } + [nil]
-        var pid: pid_t = 0
-        var attr: posix_spawnattr_t?
-        posix_spawnattr_init(&attr)
-        
-        let status = posix_spawn(&pid, path, nil, &attr, &argv, environ)
-        guard status == 0 else { throw SignError.spawnFailed(status) }
-        var result: Int32 = 0
-        waitpid(pid, &result, 0)
-        argv.forEach { if let p = $0 { free(p) } }
-        return (result >> 8) & 0xff
-    }
-
-    /// 读取 IPA 的 Bundle ID / 显示名（用于创建 App ID）
+    // MARK: - 读取 IPA 基本信息（用于 Apple ID 直签创建 App ID）
     func appInfo(ofIPA fileName: String) throws -> (bundleID: String, name: String) {
         let ipa = Self.importsDir.appendingPathComponent(fileName)
+        guard FileManager.default.fileExists(atPath: ipa.path) else { throw SignError.fileMissing(fileName) }
         let tmp = FileManager.default.temporaryDirectory.appendingPathComponent("info-\(UUID().uuidString)")
         try FileManager.default.createDirectory(at: tmp, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: tmp) }
         try FileManager.default.unzipItem(at: ipa, to: tmp)
-        let payload = tmp.appendingPathComponent("Payload")
-        guard let app = try? FileManager.default.contentsOfDirectory(at: payload, includingPropertiesForKeys: nil)
-                .first(where: { $0.pathExtension == "app" }),
+        guard let payload = try? FileManager.default.contentsOfDirectory(at: tmp, includingPropertiesForKeys: nil)
+                .first(where: { $0.lastPathComponent.lowercased() == "payload" }),
+              let app = try? FileManager.default.contentsOfDirectory(at: payload, includingPropertiesForKeys: nil)
+                .first(where: { $0.pathExtension.lowercased() == "app" }),
               let data = try? Data(contentsOf: app.appendingPathComponent("Info.plist")),
-              let dict = try? PropertyListSerialization.propertyList(from: data, format: nil) as? [String: Any],
+              let dict = (try? PropertyListSerialization.propertyList(from: data, format: nil)) as? [String: Any],
               let bid = dict["CFBundleIdentifier"] as? String else {
             throw SignError.noAppBundle
         }
@@ -182,135 +425,43 @@ final class SigningEngine: ObservableObject {
             ?? app.deletingPathExtension().lastPathComponent
         return (bid, name)
     }
-
-    var ldidPath: String? {
-        Bundle.main.path(forResource: "ldid", ofType: "") ?? Bundle.main.path(forResource: "ldid", ofType: "bin")
-    }
-
-    // MARK: 完整签名流水线
-    /// 返回签名后的 IPA 路径；onStep 回调步骤进度（0...1）
-    func sign(fileName: String,
-              keepIcon: Bool = true,
-              pemOverride: URL? = nil,
-              profileOverride: URL? = nil,
-              onProgress: @escaping (Double) -> Void,
-              onStep: @escaping (SignStep, Bool) -> Void) throws -> URL {
-
-        let work = Self.workDir
-        let fm = FileManager.default
-        try? fm.removeItem(at: work)
-        try fm.createDirectory(at: work, withIntermediateDirectories: true)
-
-        // Step 1: 解压
-        let ipa = Self.importsDir.appendingPathComponent(fileName)
-        onStep(.unzip, false)
-        try fm.unzipItem(at: ipa, to: work)
-        onStep(.unzip, true)
-        onProgress(0.15)
-
-        // Step 2: 校验描述文件
-        onStep(.verify, false)
-        guard let payload = try? fm.contentsOfDirectory(at: work, includingPropertiesForKeys: nil)
-                .first(where: { $0.lastPathComponent == "Payload" }),
-              let appURL = try? fm.contentsOfDirectory(at: payload, includingPropertiesForKeys: nil)
-                .first(where: { $0.pathExtension == "app" }) else {
-            throw SignError.noAppBundle
-        }
-        let profileURL = profileOverride ?? Self.certsDir.appendingPathComponent("embedded.mobileprovision")
-        var profile: [String: Any] = [:]
-        if FileManager.default.fileExists(atPath: profileURL.path) {
-            profile = try extractProfilePlist(at: profileURL)
-            if let bid = profile["application-identifier"] as? String {
-                let realID = bid.components(separatedBy: ".").dropFirst().joined(separator: ".")
-                if !realID.isEmpty && !realID.hasPrefix("*") {
-                    let infoPlist = appURL.appendingPathComponent("Info.plist")
-                    if var info = try? PropertyListSerialization.propertyList(from: Data(contentsOf: infoPlist), format: nil) as? [String: Any] {
-                        info["CFBundleIdentifier"] = realID
-                        if !keepIcon { info["CFBundleIconName"] = nil }
-                        let d = try PropertyListSerialization.data(fromPropertyList: info, format: .binary, options: 0)
-                        try d.write(to: infoPlist)
-                    }
-                }
-            }
-        } else {
-            throw SignError.noProfile
-        }
-        let entURL = work.appendingPathComponent("entitlements.plist")
-        try writeEntitlements(from: profile, to: entURL)
-        onStep(.verify, true)
-        onProgress(0.3)
-
-        // Step 3: ldid 重签名（主二进制 + 所有 Frameworks + PlugIns）
-        onStep(.resign, false)
-        guard let ldid = ldidPath else { throw SignError.noLdid }
-        let pem = try (pemOverride ?? exportPEM()).path
-        // 覆盖 embedded.mobileprovision
-        try? fm.removeItem(at: appURL.appendingPathComponent("embedded.mobileprovision"))
-        try fm.copyItem(at: profileURL, to: appURL.appendingPathComponent("embedded.mobileprovision"))
-
-        var binaryName = appURL.deletingPathExtension().lastPathComponent
-        if let infoData = try? Data(contentsOf: appURL.appendingPathComponent("Info.plist")),
-           let infoDict = try? PropertyListSerialization.propertyList(from: infoData, format: nil) as? [String: Any],
-           let exec = infoDict["CFBundleExecutable"] as? String {
-            binaryName = exec
-        }
-        let targets = [appURL.appendingPathComponent(binaryName)]
-            + ((try? fm.subdirectories(of: appURL.appendingPathComponent("Frameworks"))) ?? []).map { $0.appendingPathComponent($0.deletingPathExtension().lastPathComponent) }
-            + ((try? fm.subdirectories(of: appURL.appendingPathComponent("PlugIns"))) ?? []).flatMap { appex in
-                ((try? fm.subdirectories(of: appex.appendingPathComponent("Frameworks"))) ?? []).map { $0.appendingPathComponent($0.deletingPathExtension().lastPathComponent) }
-            }
-        for target in targets {
-            try runBinary(at: ldid, args: ["-S" + entURL.path, "-K", pem, target.path])
-        }
-        onStep(.resign, true)
-        onProgress(0.75)
-
-        // Step 4: 重新打包
-        onStep(.pack, false)
-        let signedName = fileName.replacingOccurrences(of: ".ipa", with: "") + "-signed.ipa"
-        let out = Self.signedDir.appendingPathComponent(signedName)
-        try? fm.removeItem(at: out)
-        try fm.zipItem(at: payload, to: out)
-        onStep(.pack, true)
-        onProgress(1.0)
-
-        try? fm.removeItem(at: work)
-        return out
-    }
 }
 
+// MARK: - 工具
 extension FileManager {
-    var documentsURL: URL {
-        urls(for: .documentDirectory, in: .userDomainMask)[0]
-    }
-    func subdirectories(of url: URL) throws -> [URL] {
-        try contentsOfDirectory(at: url, includingPropertiesForKeys: nil)
-            .filter { (try? $0.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) == true }
-    }
+    var documentsURL: URL { urls(for: .documentDirectory, in: .userDomainMask)[0] }
 }
 
 extension Data {
     /// 定位 CMS 包裹中的 XML plist 范围
     func xmlPlistRange() -> Data? {
-        guard let start = range(of: Data("<?xml".utf8)),
-              let end = range(of: Data("</plist>".utf8), in: start.upperBound..<endIndex) else { return nil }
+        guard let start = range(of: Data("<?xml".utf8)) else { return nil }
+        guard let end = range(of: Data("</plist>".utf8), in: start.lowerBound..<endIndex) else { return nil }
         return subdata(in: start.lowerBound..<end.upperBound)
     }
 }
 
 enum SignError: LocalizedError {
-    case badProfile, noEntitlements, badP12, noAppBundle, noProfile, noLdid, spawnFailed(Int32)
+    case badProfile, noEntitlements, badP12, noAppBundle, noProfile, noP12
+    case notIPA
+    case fileMissing(String)
+    case cmsFailed(String)
+    case signFailed(String)
     case anisette(String)
     case apple(String)
+
     var errorDescription: String? {
         switch self {
         case .badProfile: return "描述文件无法解析"
         case .noEntitlements: return "描述文件中缺少 Entitlements"
         case .badP12: return "证书或密码错误"
         case .noAppBundle: return "IPA 中找不到 .app 包"
-        case .noProfile: return "请先导入 .mobileprovision 描述文件"
-        case .noLdid: return "签名组件 ldid 缺失"
-        case .spawnFailed(let c): return "签名进程启动失败(\(c))"
+        case .noProfile: return "缺少 .mobileprovision 描述文件（用证书签名必须导入）"
+        case .noP12: return "请先导入 .p12 证书"
+        case .notIPA: return "请选择 .ipa 文件"
+        case .fileMissing(let n): return "找不到已导入的文件：\(n)，请重新导入"
+        case .cmsFailed(let m): return "证书签名失败：\(m)"
+        case .signFailed(let m): return "签名失败：\(m)"
         case .anisette(let m): return m
         case .apple(let m): return m
         }
