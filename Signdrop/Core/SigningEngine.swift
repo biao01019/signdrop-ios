@@ -88,8 +88,11 @@ final class SigningEngine: ObservableObject {
         var key: SecKey?
         SecIdentityCopyPrivateKey(identity, &key)
         guard let key else { throw SignError.badP12 }
-        var keyData = SecKeyCopyExternalRepresentation(key, nil) as Data
-        if (key.keyType as String) == (kSecAttrKeyTypeECDSA as String) {
+        guard let keyData0 = SecKeyCopyExternalRepresentation(key, nil) as Data? else { throw SignError.badP12 }
+        var keyData = keyData0
+        let attrs = SecKeyCopyAttributes(key) as? [String: Any]
+        let keyTypeRaw = attrs?[kSecAttrKeyType as String] as? String ?? ""
+        if keyTypeRaw == (kSecAttrKeyTypeECDSA as String) {
             // SEC1 → 包一层 EC PRIVATE KEY（ldid 兼容 PEM EC）
             pem += sec1ToPEM(keyData)
         } else {
@@ -150,8 +153,8 @@ final class SigningEngine: ObservableObject {
         var pid: pid_t = 0
         var attr: posix_spawnattr_t?
         posix_spawnattr_init(&attr)
-        var spawnedEnv = environ
-        let status = posix_spawn(&pid, path, nil, &attr, &argv, &spawnedEnv)
+        
+        let status = posix_spawn(&pid, path, nil, &attr, &argv, environ)
         guard status == 0 else { throw SignError.spawnFailed(status) }
         var result: Int32 = 0
         waitpid(pid, &result, 0)
