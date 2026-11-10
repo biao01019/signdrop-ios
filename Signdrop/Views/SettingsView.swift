@@ -33,24 +33,38 @@ struct SettingsView: View {
                         deviceCard.padding(.horizontal, 20).padding(.bottom, 24)
                         SectionHeader(title: "通用").padding(.horizontal, 20).padding(.bottom, 10)
                         generalCard.padding(.horizontal, 20).padding(.bottom, 18)
-                        Text("Signdrop v1.2.0 · 本地签名，数据不出设备")
+                        Text("Signdrop v1.4.0 · 本地签名，数据不出设备")
                             .font(.system(size: 13)).foregroundColor(.faint)
+                            .padding(.bottom, 14)
+                        logoutButton
                     }
-                    Color.clear.frame(height: 110)
+                    Color.clear.frame(height: 130)
                 }
             }
         }
-        .overlay(alignment: .bottom) {
-            VStack(spacing: 10) {
-                FloatingTabBar(selection: $app.tab, items: [
-                    ("square.grid.2x2.fill", "应用"),
-                    ("checkmark.shield", "证书"),
-                    ("clock", "任务"),
-                    ("slider.horizontal.3", "设置"),
-                ])
-                HomeIndicator()
+    }
+
+    // 退出登录
+    private var logoutButton: some View {
+        Button {
+            AppleIDService.shared.signOut()
+            UserDefaults.standard.set(false, forKey: "sd_logged_in")
+            UserDefaults.standard.set(false, forKey: "sd_skipped_login")
+            app.isLoggedIn = false
+            app.account = ""
+            app.showLogin = true
+        } label: {
+            HStack(spacing: 8) {
+                Image(systemName: "rectangle.portrait.and.arrow.right")
+                    .font(.system(size: 15, weight: .semibold))
+                Text("退出登录")
+                    .font(.system(size: 16, weight: .semibold))
             }
+            .foregroundColor(.sdRed)
+            .frame(maxWidth: .infinity).frame(height: 60)
+            .background(Color.card).cornerRadius(20)
         }
+        .padding(.horizontal, 20)
     }
 
     private var accountCard: some View {
