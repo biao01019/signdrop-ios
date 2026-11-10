@@ -11,6 +11,7 @@ struct CertificatesView: View {
     @State var p12Password: String = ""
     @State var issuing = false
     @State var issueLog: String?
+    @State var detailCert: CertInfo? = nil
 
     var body: some View {
         VStack(spacing: 0) {
@@ -20,13 +21,24 @@ struct CertificatesView: View {
                     HStack {
                         Text("证书").font(.system(size: 34, weight: .bold)).foregroundColor(.ink)
                         Spacer()
-                        CircleBtn("plus")
+                        // 右上角 + = 导入证书
+                        Button {
+                            showImporter = true
+                        } label: {
+                            CircleBtn("plus")
+                        }
                     }
                     .padding(.horizontal, 20)
                     .padding(.bottom, 22)
 
-                    certCard(certs[0]).padding(.horizontal, 20).padding(.bottom, 16)
-                    certCard(certs[1]).padding(.horizontal, 20).padding(.bottom, 24)
+                    certCard(certs[0])
+                        .padding(.horizontal, 20).padding(.bottom, 16)
+                        .contentShape(Rectangle())
+                        .onTapGesture { detailCert = certs[0] }
+                    certCard(certs[1])
+                        .padding(.horizontal, 20).padding(.bottom, 24)
+                        .contentShape(Rectangle())
+                        .onTapGesture { detailCert = certs[1] }
 
                     SectionHeader(title: "签名设备", trailing: "2 / 3 台")
                         .padding(.horizontal, 20).padding(.bottom, 12)
@@ -85,6 +97,11 @@ struct CertificatesView: View {
                     Color.clear.frame(height: 110)
                 }
             }
+        }
+        // 证书详情页
+        .sheet(item: $detailCert) { c in
+            CertificateDetailView(cert: c)
+                .environmentObject(app)
         }
         .fileImporter(isPresented: $showImporter,
                       allowedContentTypes: [.data],
