@@ -92,7 +92,7 @@ final class SigningEngine: ObservableObject {
         var keyData = keyData0
         let attrs = SecKeyCopyAttributes(key) as? [String: Any]
         let keyTypeRaw = attrs?[kSecAttrKeyType as String] as? String ?? ""
-        if keyTypeRaw == (kSecAttrKeyTypeECDSA as String) {
+        if keyTypeRaw == (kSecAttrKeyTypeECSECPrimeRandom as String) {
             // SEC1 → 包一层 EC PRIVATE KEY（ldid 兼容 PEM EC）
             pem += sec1ToPEM(keyData)
         } else {
