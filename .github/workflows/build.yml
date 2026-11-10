@@ -1,0 +1,65 @@
+name: Build Signdrop IPA
+
+on:
+  push:
+    branches: [ main ]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: macos-14
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install XcodeGen
+        run: brew install xcodegen
+
+      - name: Download ldid (iOS arm64) into app bundle resources
+        run: |
+          mkdir -p Signdrop/Resources
+          curl -sL -o Signdrop/Resources/ldid \
+            https://github.com/ProcursusTeam/ldid/releases/download/v2.1.5-procursus7/ldid_iphoneos_arm64
+          chmod +x Signdrop/Resources/ldid
+          file Signdrop/Resources/ldid
+
+      - name: Generate Xcode project
+        run: xcodegen generate
+
+      - name: Build .app (unsigned, device)
+        run: |
+          xcodebuild -project Signdrop.xcodeproj \
+            -scheme Signdrop \
+            -configuration Release \
+            -sdk iphoneos \
+            -destination 'generic/platform=iOS' \
+            -derivedDataPath build \
+            CODE_SIGNING_ALLOWED=NO CODE_SIGN_IDENTITY="" CODE_SIGN_ENTITLEMENTS="" \
+            build | tail -40
+
+      - name: Package IPA
+        run: |
+          APP=$(find build/Build/Products/Release-iphoneos -maxdepth 1 -name "*.app" | head -1)
+          echo "App: $APP"
+          mkdir -p Payload
+          cp -R "$APP" Payload/
+          zip -qry Signdrop.ipa Payload
+          ls -la Signdrop.ipa
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: Signdrop-ipa
+          path: Signdrop.ipa
+
+      - name: Create release and upload IPA
+        run: |
+          gh release create v1.2.0 Signdrop.ipa \
+            --title "Signdrop v1.2.0" \
+            --notes "Signdrop iOS 自签名工具 · 未签名 IPA（需用 Apple ID 通过 Sideloadly/AltStore 安装）" \
+            --target $GITHUB_SHA
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
