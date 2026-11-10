@@ -8,6 +8,11 @@ struct LoginView: View {
     @State var password = "signdrop123"
     @State var showPassword = false
     @State var showRegister = false
+    @State var loading = false
+    @State var errorText: String?
+    @State var show2FA = false
+    @State var code = ""
+    @State var codeError: String?
 
     var body: some View {
         VStack(spacing: 0) {
@@ -77,7 +82,13 @@ struct LoginView: View {
                     .padding(.bottom, 24)
 
                     // 登录按钮
-                    PrimaryButton(title: "登录") { login() }
+                    PrimaryButton(title: loading ? "正在登录…" : "登录") { login() }
+                    if let e = errorText {
+                        Text(e)
+                            .font(.system(size: 12))
+                            .foregroundColor(.sdRed)
+                            .padding(.top, 10)
+                    }
                     HStack {
                         Rectangle().fill(Color.divider).frame(height: 1)
                         Text("或使用").font(.system(size: 13)).foregroundColor(.faint).padding(.horizontal, 14)
@@ -113,6 +124,12 @@ struct LoginView: View {
                             .font(.system(size: 14, weight: .semibold)).foregroundColor(.sdBlue)
                     }
                     .frame(maxWidth: .infinity)
+
+                    Button("暂时跳过，先用导入证书签名") { skipLogin() }
+                        .font(.system(size: 13))
+                        .foregroundColor(.faint)
+                        .frame(maxWidth: .infinity)
+                        .padding(.top, 14)
                     Color.clear.frame(height: 24)
                 }
                 .padding(.horizontal, 20)
@@ -120,6 +137,51 @@ struct LoginView: View {
         }
         .background(Color.bg.ignoresSafeArea())
         .fullScreenCover(isPresented: $showRegister) { RegisterView().environmentObject(app) }
+        .sheet(isPresented: $show2FA) { twoFactorSheet }
+    }
+
+    private var twoFactorSheet: some View {
+        VStack(spacing: 0) {
+            Capsule().fill(Color(hex: 0xE4E6EC)).frame(width: 36, height: 5).padding(.top, 8)
+            VStack(alignment: .leading, spacing: 0) {
+                Text("双重认证")
+                    .font(.system(size: 24, weight: .bold)).foregroundColor(.ink)
+                    .padding(.top, 26)
+                Text("输入受信任设备上显示的 6 位验证码")
+                    .font(.system(size: 14)).foregroundColor(.sub)
+                    .padding(.top, 8).padding(.bottom, 22)
+
+                Card {
+                    TextField("000000", text: $code)
+                        .font(.system(size: 26, weight: .semibold, design: .monospaced))
+                        .keyboardType(.numberPad)
+                        .multilineTextAlignment(.center)
+                        .frame(height: 64)
+                        .padding(.horizontal, 16)
+                }
+                .padding(.bottom, 12)
+
+                if let e = codeError {
+                    Text(e).font(.system(size: 12)).foregroundColor(.sdRed)
+                        .padding(.bottom, 8)
+                }
+
+                PrimaryButton(title: loading ? "验证中…" : "验证") { submitCode() }
+                    .padding(.top, 6)
+                Button("取消") {
+                    show2FA = false
+                    code = ""
+                }
+                .font(.system(size: 15))
+                .foregroundColor(.sub)
+                .frame(maxWidth: .infinity)
+                .padding(.top, 14)
+            }
+            .padding(.horizontal, 20)
+            Spacer()
+        }
+        .background(Color.bg.ignoresSafeArea())
+        .presentationDetents([.height(400)])
     }
 
     private func featureCol(_ icon: String, _ title: String) -> some View {
@@ -132,11 +194,67 @@ struct LoginView: View {
     }
 
     private func login() {
-        guard !email.isEmpty, password.count >= 6 else { return }
+        guard !email.isEmpty, password.count >= 4 else {
+            errorText = "请输入 Apple ID 与密码"
+            return
+        }
+        loading = true
+        errorText = nil
+        Task {
+            do {
+                let result = try await AppleIDService.shared.signIn(username: email, password: password)
+                await MainActor.run {
+                    loading = false
+                    switch result {
+                    case .success:
+                        completeLogin()
+                    case .needs2FA:
+                        show2FA = true
+                    case .needsSMS(let phone):
+                        errorText = "需要短信验证：\(phone)"
+                        show2FA = true
+                    }
+                }
+            } catch {
+                await MainActor.run {
+                    loading = false
+                    errorText = error.localizedDescription
+                }
+            }
+        }
+    }
+
+    private func submitCode() {
+        guard code.count == 6 else { codeError = "请输入 6 位验证码"; return }
+        codeError = nil
+        loading = true
+        Task {
+            do {
+                _ = try await AppleIDService.shared.submit2FACode(code)
+                await MainActor.run {
+                    loading = false
+                    show2FA = false
+                    completeLogin()
+                }
+            } catch {
+                await MainActor.run {
+                    loading = false
+                    codeError = error.localizedDescription
+                }
+            }
+        }
+    }
+
+    private func completeLogin() {
         app.account = email
         app.isLoggedIn = true
         UserDefaults.standard.set(true, forKey: "sd_logged_in")
         UserDefaults.standard.set(email, forKey: "sd_account")
+        app.showLogin = false
+    }
+
+    private func skipLogin() {
+        UserDefaults.standard.set(true, forKey: "sd_skipped_login")
         app.showLogin = false
     }
 }
