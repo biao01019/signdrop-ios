@@ -31,6 +31,7 @@ jobs:
 
       - name: Build .app (unsigned, device)
         run: |
+          set -o pipefail
           xcodebuild -project Signdrop.xcodeproj \
             -scheme Signdrop \
             -configuration Release \
@@ -38,10 +39,12 @@ jobs:
             -destination 'generic/platform=iOS' \
             -derivedDataPath build \
             CODE_SIGNING_ALLOWED=NO CODE_SIGN_IDENTITY="" CODE_SIGN_ENTITLEMENTS="" \
-            build | tail -40
+            build 2>&1 | tee build.log | tail -40
 
       - name: Package IPA
         run: |
+          set -euo pipefail
+          grep -q "BUILD SUCCEEDED" build.log || { echo "构建未通过，查看上方错误"; exit 1; }
           APP=$(find build/Build/Products/Release-iphoneos -maxdepth 1 -name "*.app" | head -1)
           echo "App: $APP"
           mkdir -p Payload
