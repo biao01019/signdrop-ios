@@ -6,6 +6,9 @@ struct SettingsView: View {
     @State var autoRemind = true
     @State var keepHistory = true
     @State var copied = false
+    @State var anisetteServer = UserDefaults.standard.string(forKey: "sd_anisette_server") ?? AnisetteClient.defaultServer
+    @State var udid = UserDefaults.standard.string(forKey: "sd_udid") ?? ""
+    @State var appleLoggedIn = AppleIDService.shared.isLoggedIn
 
     var body: some View {
         VStack(spacing: 0) {
@@ -22,6 +25,8 @@ struct SettingsView: View {
                     accountCard.padding(.horizontal, 20).padding(.bottom, 24)
 
                     Group {
+                        SectionHeader(title: "Apple ID 直签").padding(.horizontal, 20).padding(.bottom, 10)
+                        appleCard.padding(.horizontal, 20).padding(.bottom, 24)
                         SectionHeader(title: "签名").padding(.horizontal, 20).padding(.bottom, 10)
                         signCard.padding(.horizontal, 20).padding(.bottom, 24)
                         SectionHeader(title: "设备").padding(.horizontal, 20).padding(.bottom, 10)
@@ -70,6 +75,57 @@ struct SettingsView: View {
                     .foregroundColor(Color(hex: 0xC4C9D4))
             }
             .padding(18)
+        }
+    }
+
+    private var appleCard: some View {
+        Card {
+            VStack(spacing: 0) {
+                HStack {
+                    Text("登录状态").font(.system(size: 16)).foregroundColor(.ink)
+                    Spacer()
+                    Badge(text: appleLoggedIn ? "已登录" : "未登录",
+                          style: appleLoggedIn ? .green : .orange)
+                    if appleLoggedIn {
+                        Button("退出") {
+                            AppleIDService.shared.signOut()
+                            appleLoggedIn = false
+                            UserDefaults.standard.set(false, forKey: "sd_logged_in")
+                        }
+                        .font(.system(size: 13))
+                        .foregroundColor(.sdRed)
+                        .padding(.leading, 8)
+                    }
+                }
+                .frame(height: 54)
+                Divider().background(Color.divider)
+
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("anisette 服务器").font(.system(size: 13)).foregroundColor(.sub)
+                    TextField("https://ani.sidestore.io", text: $anisetteServer)
+                        .font(.system(size: 14))
+                        .textInputAutocapitalization(.never)
+                        .autocorrectionDisabled()
+                        .onChange(of: anisetteServer) { v in
+                            UserDefaults.standard.set(v, forKey: "sd_anisette_server")
+                        }
+                }
+                .padding(.vertical, 10)
+                Divider().background(Color.divider)
+
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("本机 UDID（Apple ID 直签必填）").font(.system(size: 13)).foregroundColor(.sub)
+                    TextField("00008101-000A2F8C8F3A", text: $udid)
+                        .font(.system(size: 13, design: .monospaced))
+                        .textInputAutocapitalization(.characters)
+                        .autocorrectionDisabled()
+                        .onChange(of: udid) { v in
+                            UserDefaults.standard.set(v.trimmingCharacters(in: .whitespaces), forKey: "sd_udid")
+                        }
+                }
+                .padding(.vertical, 10)
+            }
+            .padding(.horizontal, 18).padding(.vertical, 4)
         }
     }
 
