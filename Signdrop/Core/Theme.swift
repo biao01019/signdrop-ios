@@ -172,7 +172,7 @@ struct AppIcon: View {
     }
 }
 
-// MARK: - 浮动 TabBar（胶囊）
+// MARK: - 浮动 TabBar（iOS 26 液态玻璃 Liquid Glass 风格）
 struct FloatingTabBar: View {
     @Binding var selection: Int
     let items: [(icon: String, title: String)]
@@ -182,28 +182,67 @@ struct FloatingTabBar: View {
             ForEach(items.indices, id: \.self) { i in
                 let active = selection == i
                 Button {
-                    withAnimation(.spring(response: 0.3)) { selection = i }
+                    withAnimation(.spring(response: 0.35, dampingFraction: 0.75)) { selection = i }
                 } label: {
                     VStack(spacing: 3) {
                         Image(systemName: items[i].icon)
                             .font(.system(size: 17, weight: .semibold))
-                        Text(items[i].title).font(.system(size: 10, weight: .medium))
+                            .scaleEffect(active ? 1.06 : 1.0)
+                        Text(items[i].title).font(.system(size: 10, weight: active ? .semibold : .medium))
                     }
-                    .foregroundColor(active ? .white : Color.sub)
+                    .foregroundColor(active ? .sdBlue : Color.sub)
                     .frame(maxWidth: .infinity)
-                    .frame(height: 58)
-                    .background(
-                        RoundedRectangle(cornerRadius: 29)
-                            .fill(active ? Color.sdBlue : .clear)
-                            .padding(4)
-                    )
+                    .frame(height: 56)
+                    .background {
+                        if active {
+                            // 活动胶囊：内嵌玻璃透镜（高光渐变 + 描边 + 柔影）
+                            Capsule()
+                                .fill(LinearGradient(colors: [Color.white.opacity(0.95),
+                                                              Color.white.opacity(0.40)],
+                                                     startPoint: .top, endPoint: .bottom))
+                                .overlay(
+                                    Capsule().stroke(
+                                        LinearGradient(colors: [Color.white.opacity(0.98),
+                                                                Color.sdBlue.opacity(0.25),
+                                                                Color.white.opacity(0.35)],
+                                                       startPoint: .topLeading,
+                                                       endPoint: .bottomTrailing),
+                                        lineWidth: 1)
+                                )
+                                .overlay(
+                                    // 顶部镜面高光
+                                    Capsule()
+                                        .fill(LinearGradient(colors: [Color.white.opacity(0.65), .clear],
+                                                             startPoint: .top, endPoint: .bottom))
+                                        .frame(height: 20)
+                                        .clipped()
+                                        .allowsHitTesting(false)
+                                )
+                                .shadow(color: Color.sdBlue.opacity(0.20), radius: 9, y: 4)
+                                .padding(4)
+                        }
+                    }
                 }
+                .buttonStyle(.plain)
             }
         }
-        .padding(2)
+        .padding(3)
         .background(
-            Capsule().fill(Color.white)
-                .shadow(color: .black.opacity(0.08), radius: 18, y: 6)
+            // 液态玻璃底座：超薄材质 + 白色提亮 + 边缘高光描边
+            Capsule()
+                .fill(.ultraThinMaterial)
+                .overlay(Capsule().fill(Color.white.opacity(0.52)))
+                .overlay(
+                    Capsule().stroke(
+                        LinearGradient(colors: [Color.white.opacity(0.95),
+                                                Color.white.opacity(0.30),
+                                                Color.white.opacity(0.55)],
+                                       startPoint: .topLeading,
+                                       endPoint: .bottomTrailing),
+                        lineWidth: 1)
+                )
+                .shadow(color: .black.opacity(0.10), radius: 22, y: 8)
+                .shadow(color: .black.opacity(0.05), radius: 5, y: 2)
         )
     }
 }
