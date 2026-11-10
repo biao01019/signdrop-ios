@@ -49,8 +49,8 @@ final class SigningEngine: ObservableObject {
     var hasP12: Bool { FileManager.default.fileExists(atPath: Self.certsDir.appendingPathComponent("identity.p12").path) }
 
     // MARK: 从 .mobileprovision 提取 plist（CMS 包裹，直接定位 XML）
-    func extractProfilePlist() throws -> [String: Any] {
-        let data = try Data(contentsOf: Self.certsDir.appendingPathComponent("embedded.mobileprovision"))
+    func extractProfilePlist(at url: URL? = nil) throws -> [String: Any] {
+        let data = try Data(contentsOf: url ?? Self.certsDir.appendingPathComponent("embedded.mobileprovision"))
         guard let xml = data.xmlPlistRange() else { throw SignError.badProfile }
         let plist = try PropertyListSerialization.propertyList(from: xml, format: nil)
         guard let dict = plist as? [String: Any] else { throw SignError.badProfile }
@@ -162,6 +162,27 @@ final class SigningEngine: ObservableObject {
         return (result >> 8) & 0xff
     }
 
+    /// 读取 IPA 的 Bundle ID / 显示名（用于创建 App ID）
+    func appInfo(ofIPA fileName: String) throws -> (bundleID: String, name: String) {
+        let ipa = Self.importsDir.appendingPathComponent(fileName)
+        let tmp = FileManager.default.temporaryDirectory.appendingPathComponent("info-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: tmp, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: tmp) }
+        try FileManager.default.unzipItem(at: ipa, to: tmp)
+        let payload = tmp.appendingPathComponent("Payload")
+        guard let app = try? FileManager.default.contentsOfDirectory(at: payload, includingPropertiesForKeys: nil)
+                .first(where: { $0.pathExtension == "app" }),
+              let data = try? Data(contentsOf: app.appendingPathComponent("Info.plist")),
+              let dict = try? PropertyListSerialization.propertyList(from: data, format: nil) as? [String: Any],
+              let bid = dict["CFBundleIdentifier"] as? String else {
+            throw SignError.noAppBundle
+        }
+        let name = (dict["CFBundleDisplayName"] as? String)
+            ?? (dict["CFBundleName"] as? String)
+            ?? app.deletingPathExtension().lastPathComponent
+        return (bid, name)
+    }
+
     var ldidPath: String? {
         Bundle.main.path(forResource: "ldid", ofType: "") ?? Bundle.main.path(forResource: "ldid", ofType: "bin")
     }
@@ -170,6 +191,8 @@ final class SigningEngine: ObservableObject {
     /// 返回签名后的 IPA 路径；onStep 回调步骤进度（0...1）
     func sign(fileName: String,
               keepIcon: Bool = true,
+              pemOverride: URL? = nil,
+              profileOverride: URL? = nil,
               onProgress: @escaping (Double) -> Void,
               onStep: @escaping (SignStep, Bool) -> Void) throws -> URL {
 
@@ -193,9 +216,10 @@ final class SigningEngine: ObservableObject {
                 .first(where: { $0.pathExtension == "app" }) else {
             throw SignError.noAppBundle
         }
+        let profileURL = profileOverride ?? Self.certsDir.appendingPathComponent("embedded.mobileprovision")
         var profile: [String: Any] = [:]
-        if hasProfile {
-            profile = try extractProfilePlist()
+        if FileManager.default.fileExists(atPath: profileURL.path) {
+            profile = try extractProfilePlist(at: profileURL)
             if let bid = profile["application-identifier"] as? String {
                 let realID = bid.components(separatedBy: ".").dropFirst().joined(separator: ".")
                 if !realID.isEmpty && !realID.hasPrefix("*") {
@@ -219,11 +243,10 @@ final class SigningEngine: ObservableObject {
         // Step 3: ldid 重签名（主二进制 + 所有 Frameworks + PlugIns）
         onStep(.resign, false)
         guard let ldid = ldidPath else { throw SignError.noLdid }
-        let pem = try exportPEM().path
+        let pem = try (pemOverride ?? exportPEM()).path
         // 覆盖 embedded.mobileprovision
         try? fm.removeItem(at: appURL.appendingPathComponent("embedded.mobileprovision"))
-        try fm.copyItem(at: Self.certsDir.appendingPathComponent("embedded.mobileprovision"),
-                        to: appURL.appendingPathComponent("embedded.mobileprovision"))
+        try fm.copyItem(at: profileURL, to: appURL.appendingPathComponent("embedded.mobileprovision"))
 
         var binaryName = appURL.deletingPathExtension().lastPathComponent
         if let infoData = try? Data(contentsOf: appURL.appendingPathComponent("Info.plist")),
@@ -277,6 +300,8 @@ extension Data {
 
 enum SignError: LocalizedError {
     case badProfile, noEntitlements, badP12, noAppBundle, noProfile, noLdid, spawnFailed(Int32)
+    case anisette(String)
+    case apple(String)
     var errorDescription: String? {
         switch self {
         case .badProfile: return "描述文件无法解析"
@@ -286,6 +311,8 @@ enum SignError: LocalizedError {
         case .noProfile: return "请先导入 .mobileprovision 描述文件"
         case .noLdid: return "签名组件 ldid 缺失"
         case .spawnFailed(let c): return "签名进程启动失败(\(c))"
+        case .anisette(let m): return m
+        case .apple(let m): return m
         }
     }
 }
