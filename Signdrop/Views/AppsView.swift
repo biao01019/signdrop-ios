@@ -4,10 +4,12 @@ import UniformTypeIdentifiers
 // MARK: - ① 我的应用
 struct AppsView: View {
     @EnvironmentObject var app: AppState
+    @StateObject private var engine = SigningEngine.shared
     @State var showIPAImporter = false
     @State var pendingIPA: (name: String, sizeMB: Double)? = nil
     @State var showSignConfig = false
     @State var detailApp: SignedApp? = nil
+    @State var importError: String? = nil
 
     var body: some View {
         VStack(spacing: 0) {
@@ -76,14 +78,21 @@ struct AppsView: View {
             .padding(.bottom, 108)
             .fileImporter(isPresented: $showIPAImporter,
                           allowedContentTypes: [.data],
-                          allowsMultipleSelection: false) { result in
-                guard case .success(let urls) = result, let url = urls.first else { return }
-                let scoped = url.startAccessingSecurityScopedResource()
-                defer { if scoped { url.stopAccessingSecurityScopedResource() } }
-                let name = url.lastPathComponent
-                let sizeMB = (Double((try? url.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0) / 1024 / 1024)
-                pendingIPA = (name, max(0.1, sizeMB))
-                showSignConfig = true
+                          allowsMultipleSelection: false) { picked in
+                guard case .success(let urls) = picked, let url = urls.first else { return }
+                do {
+                    // 真正复制到沙盒 Imports 目录，签名时才能读到
+                    pendingIPA = try engine.importIPA(from: url)
+                    showSignConfig = true
+                } catch {
+                    importError = error.localizedDescription
+                }
+            }
+            .alert("导入失败", isPresented: Binding(get: { importError != nil },
+                                              set: { if !$0 { importError = nil } })) {
+                Button("好", role: .cancel) { importError = nil }
+            } message: {
+                Text(importError ?? "")
             }
         }
         // 签名配置 sheet（挂在独立的 Color.clear 锚点上）
