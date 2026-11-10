@@ -100,6 +100,16 @@ struct IconSquare: View {
     var iconSize: CGFloat = 20
     var bg: Color = .iconSq
     var fg: Color = .sdBlue
+
+    init(_ systemName: String, size: CGFloat = 44, iconSize: CGFloat = 20,
+         bg: Color = .iconSq, fg: Color = .sdBlue) {
+        self.systemName = systemName
+        self.size = size
+        self.iconSize = iconSize
+        self.bg = bg
+        self.fg = fg
+    }
+
     var body: some View {
         RoundedRectangle(cornerRadius: size * 0.3)
             .fill(bg)
@@ -152,7 +162,7 @@ struct AppIcon: View {
     var glyph: String // SF Symbol，白色
     var body: some View {
         RoundedRectangle(cornerRadius: corner)
-            .fill(LinearGradient(colors: gradient.colors, startPoint: .topLeading, endPoint: .bottomTrailing))
+            .fill(LinearGradient(gradient: gradient, startPoint: .topLeading, endPoint: .bottomTrailing))
             .frame(width: size, height: size)
             .overlay(
                 Image(systemName: glyph)
