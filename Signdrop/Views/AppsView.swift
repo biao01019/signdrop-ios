@@ -1,8 +1,11 @@
 import SwiftUI
+import UniformTypeIdentifiers
 
 // MARK: - ① 我的应用
 struct AppsView: View {
     @EnvironmentObject var app: AppState
+    @State var showIPAImporter = false
+    @State var pendingIPA: (name: String, sizeMB: Double)? = nil
     @State var showSignConfig = false
     @State var detailApp: SignedApp? = nil
 
@@ -30,7 +33,7 @@ struct AppsView: View {
                         .padding(.horizontal, 20)
                         .padding(.bottom, 24)
 
-                    SectionHeader(title: "已安装应用", trailing: "5 个")
+                    SectionHeader(title: "已安装应用", trailing: "\(app.apps.count) 个")
                         .padding(.horizontal, 20)
                         .padding(.bottom, 12)
 
@@ -39,6 +42,7 @@ struct AppsView: View {
                         VStack(spacing: 0) {
                             ForEach(Array(app.apps.enumerated()), id: \.element.id) { i, item in
                                 AppRow(item: item)
+                                    .contentShape(Rectangle())
                                     .onTapGesture { detailApp = item }
                                 if i < app.apps.count - 1 {
                                     Divider().background(Color.divider).padding(.leading, 88)
@@ -52,9 +56,14 @@ struct AppsView: View {
             }
             Spacer(minLength: 0)
         }
+        // 应用详情 sheet（挂在 ScrollView 上，避免与下方 sheet 冲突）
+        .sheet(item: $detailApp) { item in
+            AppDetailView(item: item)
+        }
+        // 添加应用：右下角 + → 选择 IPA → 进入签名配置
         .overlay(alignment: .bottomTrailing) {
             Button {
-                showSignConfig = true
+                showIPAImporter = true
             } label: {
                 Image(systemName: "plus")
                     .font(.system(size: 24, weight: .medium))
@@ -65,22 +74,22 @@ struct AppsView: View {
             }
             .padding(.trailing, 24)
             .padding(.bottom, 108)
-        }
-        .overlay(alignment: .bottom) {
-            VStack(spacing: 10) {
-                FloatingTabBar(selection: $app.tab, items: [
-                    ("square.grid.2x2.fill", "应用"),
-                    ("checkmark.shield", "证书"),
-                    ("clock", "任务"),
-                    ("slider.horizontal.3", "设置"),
-                ])
-                HomeIndicator()
+            .fileImporter(isPresented: $showIPAImporter,
+                          allowedContentTypes: [.data],
+                          allowsMultipleSelection: false) { result in
+                guard case .success(let urls) = result, let url = urls.first else { return }
+                let scoped = url.startAccessingSecurityScopedResource()
+                defer { if scoped { url.stopAccessingSecurityScopedResource() } }
+                let name = url.lastPathComponent
+                let sizeMB = (Double((try? url.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0) / 1024 / 1024)
+                pendingIPA = (name, max(0.1, sizeMB))
+                showSignConfig = true
             }
         }
-        .sheet(isPresented: $showSignConfig) { SignConfigView() }
-        .sheet(item: $detailApp) { item in
-            AppDetailView(item: item)
-        }
+        // 签名配置 sheet（挂在独立的 Color.clear 锚点上）
+        .background(Color.clear.sheet(isPresented: $showSignConfig) {
+            SignConfigView(preImported: pendingIPA)
+        })
     }
 
     private var certCard: some View {
@@ -89,22 +98,22 @@ struct AppsView: View {
                 HStack(spacing: 12) {
                     IconSquare("checkmark.shield.fill")
                     VStack(alignment: .leading, spacing: 3) {
-                        Text("个人开发者证书")
+                        Text(app.certs.first?.name ?? "个人开发者证书")
                             .font(.system(size: 16, weight: .bold))
                             .foregroundColor(.ink)
-                        Text("Team 8F2K9D · 2027年3月12日到期")
+                        Text("Team \(app.certs.first?.team ?? "8F2K9D") · \(app.certs.first.map { "\(cnDate($0.expire))到期" } ?? "2027年3月12日到期")")
                             .font(.system(size: 13))
                             .foregroundColor(.sub)
                     }
                     Spacer()
                     Badge(text: "有效", style: .green)
                 }
-                ProgressBar(value: 0.55)
+                ProgressBar(value: app.certs.first?.progress ?? 0.55)
                     .padding(.top, 14)
                 HStack {
-                    Text("剩余 123 天").font(.system(size: 13)).foregroundColor(.sub)
+                    Text("剩余 \(app.certs.first?.daysLeft ?? 123) 天").font(.system(size: 13)).foregroundColor(.sub)
                     Spacer()
-                    Button("管理证书") {}
+                    Button("管理证书") { app.tab = 1 }
                         .font(.system(size: 14, weight: .semibold))
                         .foregroundColor(.sdBlue)
                 }
