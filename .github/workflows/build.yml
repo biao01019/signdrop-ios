@@ -24,6 +24,7 @@ jobs:
       - name: Build .app (unsigned, device)
         run: |
           set -uo pipefail
+          STATUS=0
           xcodebuild -project Signdrop.xcodeproj \
             -scheme Signdrop \
             -configuration Release \
@@ -31,15 +32,15 @@ jobs:
             -destination 'generic/platform=iOS' \
             -derivedDataPath build \
             CODE_SIGNING_ALLOWED=NO CODE_SIGN_IDENTITY="" CODE_SIGN_ENTITLEMENTS="" \
-            build > build.log 2>&1
-          STATUS=$?
+            build > build.log 2>&1 || STATUS=$?
           echo "===== ERRORS ====="
           grep -nE "error:" build.log | head -60 || true
-          echo "===== LAST 30 LINES ====="
-          tail -30 build.log || true
           echo "===== /ERRORS ====="
-          grep -q "BUILD SUCCEEDED" build.log || exit 1
-          test $STATUS -eq 0 || exit 1
+          if [ "$STATUS" -ne 0 ]; then
+            echo "xcodebuild exit $STATUS"
+            tail -20 build.log || true
+            exit 1
+          fi
 
       - name: Upload build log
         if: always()
