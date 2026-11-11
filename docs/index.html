@@ -1,0 +1,176 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#F2F3F7">
+<title>安装 Signdrop · iOS 自签名工具</title>
+<style>
+  :root{
+    --bg:#F2F3F7; --card:#FFFFFF; --ink:#17181C; --sub:#8A909C; --faint:#AAB0BB;
+    --blue:#147AFF; --blue-weak:#EAF3FF; --green:#30C759; --green-bg:#E7F7EC;
+    --orange:#F5A623; --orange-bg:#FDF3E1; --divider:#F0F1F5; --track:#E9EBF0;
+    --radius:22px;
+  }
+  *{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+  html,body{margin:0;padding:0}
+  body{
+    background:var(--bg); color:var(--ink);
+    font-family:-apple-system,BlinkMacSystemFont,"SF Pro SC","PingFang SC","Helvetica Neue",Arial,sans-serif;
+    -webkit-font-smoothing:antialiased;
+    padding:max(28px,env(safe-area-inset-top)) 18px calc(40px + env(safe-area-inset-bottom));
+    display:flex; justify-content:center;
+  }
+  .wrap{width:100%;max-width:440px}
+
+  .app{display:flex;gap:16px;align-items:center;margin-bottom:22px}
+  .icon{
+    width:76px;height:76px;border-radius:19px;flex:0 0 76px;
+    background:var(--blue-weak);overflow:hidden;
+    box-shadow:0 8px 22px rgba(20,122,255,.20),0 1px 0 rgba(255,255,255,.7) inset;
+  }
+  .icon img{width:100%;height:100%;display:block;object-fit:cover}
+  .app h1{font-size:23px;line-height:1.2;margin:0 0 5px;letter-spacing:-.4px;font-weight:700}
+  .app p{margin:0;color:var(--sub);font-size:13.5px}
+  .badge{
+    display:inline-flex;align-items:center;gap:5px;margin-top:8px;
+    background:var(--green-bg);color:#1E9E45;font-size:11.5px;font-weight:600;
+    padding:3px 9px;border-radius:20px;
+  }
+  .badge i{width:5px;height:5px;border-radius:50%;background:var(--green);display:block}
+
+  .card{background:var(--card);border-radius:var(--radius);padding:6px;box-shadow:0 1px 3px rgba(23,24,28,.05),0 8px 24px rgba(23,24,28,.04);margin-bottom:14px}
+
+  .btn{
+    display:flex;align-items:center;justify-content:center;gap:8px;
+    width:100%;border:none;cursor:pointer;text-decoration:none;
+    font-family:inherit;font-size:16px;font-weight:600;letter-spacing:-.2px;
+    padding:15px 18px;border-radius:16px;transition:transform .15s ease,opacity .15s ease;
+  }
+  .btn:active{transform:scale(.985);opacity:.9}
+  .btn-primary{background:var(--blue);color:#fff;box-shadow:0 6px 18px rgba(20,122,255,.30)}
+  .btn-ghost{background:transparent;color:var(--blue);font-size:15px;padding:13px 18px}
+  .btn svg{width:18px;height:18px;flex:0 0 18px}
+
+  .note{
+    display:flex;gap:10px;background:var(--orange-bg);border-radius:16px;padding:13px 15px;
+    font-size:13px;line-height:1.55;color:#8A5B00;margin-bottom:14px;
+  }
+  .note b{color:#6B4600}
+  .note svg{width:16px;height:16px;flex:0 0 16px;margin-top:2px}
+
+  .sect-title{font-size:13px;font-weight:600;color:var(--sub);padding:0 6px;margin:20px 0 9px;letter-spacing:.2px}
+
+  .rows{background:var(--card);border-radius:var(--radius);overflow:hidden;box-shadow:0 1px 3px rgba(23,24,28,.05),0 8px 24px rgba(23,24,28,.04)}
+  .row{display:flex;align-items:center;gap:13px;padding:15px 17px;position:relative}
+  .row+.row::before{content:"";position:absolute;left:17px;right:0;top:0;height:1px;background:var(--divider)}
+  .num{
+    width:24px;height:24px;flex:0 0 24px;border-radius:50%;background:var(--blue-weak);color:var(--blue);
+    font-size:12.5px;font-weight:700;display:flex;align-items:center;justify-content:center;
+  }
+  .row .t{font-size:14.5px;font-weight:600;margin:0 0 2px}
+  .row .d{font-size:12.5px;color:var(--sub);line-height:1.5;margin:0}
+
+  .meta{background:var(--card);border-radius:var(--radius);overflow:hidden;box-shadow:0 1px 3px rgba(23,24,28,.05),0 8px 24px rgba(23,24,28,.04)}
+  .mrow{display:flex;justify-content:space-between;gap:14px;padding:13px 17px;font-size:13.5px;position:relative}
+  .mrow+.mrow::before{content:"";position:absolute;left:17px;right:0;top:0;height:1px;background:var(--divider)}
+  .mrow span:first-child{color:var(--sub)}
+  .mrow span:last-child{font-weight:500;font-variant-numeric:tabular-nums;word-break:break-all;text-align:right}
+
+  .foot{text-align:center;color:var(--faint);font-size:11.5px;line-height:1.7;margin-top:26px}
+  .foot a{color:var(--sub);text-decoration:none}
+
+  .toast{
+    position:fixed;left:50%;bottom:calc(28px + env(safe-area-inset-bottom));transform:translate(-50%,14px);
+    background:rgba(23,24,28,.92);color:#fff;font-size:13px;padding:10px 17px;border-radius:20px;
+    opacity:0;pointer-events:none;transition:.22s ease;backdrop-filter:blur(8px);z-index:9;
+  }
+  .toast.on{opacity:1;transform:translate(-50%,0)}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <div class="app">
+    <div class="icon"><img src="icon.png" alt="Signdrop"></div>
+    <div>
+      <h1>Signdrop</h1>
+      <p>iOS 自签名工具 · 用你的 Apple ID 签 7 天</p>
+      <div class="badge"><i></i>v1.5.0 最新版</div>
+    </div>
+  </div>
+
+  <div class="card">
+    <a class="btn btn-primary" id="ota" href="itms-services://?action=download-manifest&url=https://biao01019.github.io/signdrop-ios/manifest.plist">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v12"/><path d="m7 11 5 5 5-5"/><path d="M5 21h14"/></svg>
+      直接安装到 iPhone
+    </a>
+    <a class="btn btn-ghost" href="https://github.com/biao01019/signdrop-ios/releases/download/v1.5.0/Signdrop.ipa">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><path d="M7 10l5 5 5-5"/><path d="M12 15V3"/></svg>
+      下载未签名 IPA（839 KB）
+    </a>
+  </div>
+
+  <div class="note">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 9v4"/><path d="M12 17h.01"/><path d="M10.3 3.9 1.9 18a2 2 0 0 0 1.7 3h16.8a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0z"/></svg>
+    <div><b>「直接安装」需要 IPA 已被签名。</b>这个包是未签名的原始包，iOS 会拒绝安装。请先用 Sideloadly / AltStore 用自己的 Apple ID 签一次，或改用下方步骤。</div>
+  </div>
+
+  <div class="sect-title">用 Apple ID 自签安装</div>
+  <div class="rows">
+    <div class="row">
+      <div class="num">1</div>
+      <div><p class="t">电脑装 Sideloadly</p><p class="d">Windows / macOS 均可，官网直接下载安装。</p></div>
+    </div>
+    <div class="row">
+      <div class="num">2</div>
+      <div><p class="t">手机连电脑，拖入 IPA</p><p class="d">填自己的 Apple ID，点 Start，等待签名完成。</p></div>
+    </div>
+    <div class="row">
+      <div class="num">3</div>
+      <div><p class="t">信任开发者证书</p><p class="d">设置 → 通用 → VPN与设备管理 → 选中你的 Apple ID → 信任。</p></div>
+    </div>
+    <div class="row">
+      <div class="num">4</div>
+      <div><p class="t">打开 Signdrop，导入 IPA 再签一次</p><p class="d">首页 + 添加 IPA → 用 App 内 Apple ID 直签，7 天有效，到期重签即可。</p></div>
+    </div>
+  </div>
+
+  <div class="sect-title">安装包信息</div>
+  <div class="meta">
+    <div class="mrow"><span>版本</span><span>1.5.0 (190)</span></div>
+    <div class="mrow"><span>Bundle ID</span><span>com.signdrop.Signdrop</span></div>
+    <div class="mrow"><span>最低系统</span><span>iOS 16.0</span></div>
+    <div class="mrow"><span>架构</span><span>arm64</span></div>
+    <div class="mrow"><span>大小</span><span>839 KB</span></div>
+    <div class="mrow"><span>SHA256</span><span>1edbf8da650c224c…</span></div>
+  </div>
+
+  <div class="foot">
+    未签名包仅供自签使用 · 请使用你自己的 Apple ID<br>
+    <a href="https://github.com/biao01019/signdrop-ios">github.com/biao01019/signdrop-ios</a>
+  </div>
+</div>
+
+<div class="toast" id="toast">在 iPhone 上用 Safari 打开本页</div>
+
+<script>
+document.getElementById('ota').addEventListener('click', function (e) {
+  var ua = navigator.userAgent || '';
+  var isIOS = /iPad|iPhone|iPod/.test(ua) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+  if (!isIOS) {
+    e.preventDefault();
+    showToast('请在 iPhone 上用 Safari 打开本页');
+  }
+});
+
+function showToast(msg) {
+  var t = document.getElementById('toast');
+  t.textContent = msg;
+  t.classList.add('on');
+  clearTimeout(window.__tt);
+  window.__tt = setTimeout(function () { t.classList.remove('on'); }, 2200);
+}
+</script>
+</body>
+</html>
