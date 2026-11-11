@@ -134,14 +134,40 @@ final class SigningEngine: ObservableObject {
         SecIdentityCopyPrivateKey(identity, &key)
         guard let cert, let key else { throw SignError.badP12 }
 
-        var team: String?
-        if let values = SecCertificateCopyValues(cert, [kSecOIDOrganizationalUnitName] as CFArray, nil) as? [String: Any],
-           let ou = values[kSecOIDOrganizationalUnitName as String] as? [String: Any],
-           let arr = ou[kSecPropertyKeyValue as String] as? [Any] {
-            team = arr.first as? String
-        }
+        let team = Self.organizationalUnit(from: cert)
         let cn = (SecCertificateCopySubjectSummary(cert) as String?) ?? "导入证书"
         return Identity(label: cn, certificate: cert, privateKey: key, teamID: team)
+    }
+
+    /// iOS 上没有 SecCertificateCopyValues（macOS 专属），这里直接扫 DER 里的 OU 字段（OID 2.5.4.11）。
+    /// Apple 开发证书的 OU 就是 Team ID（10 位大写字母/数字）。
+    static func organizationalUnit(from cert: SecCertificate) -> String? {
+        let der = [UInt8](SecCertificateCopyData(cert) as Data)
+        let ouOID: [UInt8] = [0x06, 0x03, 0x55, 0x04, 0x0B]
+        var i = 0
+        while i + ouOID.count < der.count {
+            if Array(der[i..<(i + ouOID.count)]) == ouOID {
+                var j = i + ouOID.count
+                let tag = der[j]; j += 1
+                guard j < der.count else { break }
+                var len = Int(der[j]); j += 1
+                if len & 0x80 != 0 {
+                    let n = len & 0x7F
+                    guard n >= 1, n <= 3, j + n <= der.count else { i += 1; continue }
+                    var v = 0
+                    for k in 0..<n { v = (v << 8) | Int(der[j + k]) }
+                    j += n; len = v
+                }
+                if (tag == 0x0C || tag == 0x13 || tag == 0x16), len > 0, j + len <= der.count {
+                    let s = String(decoding: der[j..<(j + len)], as: UTF8.self)
+                    if s.count == 10, s.allSatisfy({ ($0.isUppercase || $0.isNumber) && $0.isASCII }) {
+                        return s
+                    }
+                }
+            }
+            i += 1
+        }
+        return nil
     }
 
     /// 证书链上需要的中间证书（p12 里通常没有，必须随 CMS 提供）
@@ -382,23 +408,25 @@ final class SigningEngine: ObservableObject {
 
         for item in items {
             if item.isDir {
-                try archive.addEntry(with: item.path + "/", type: .directory,
-                                     uncompressedSize: 0, modificationDate: Date(),
-                                     permissions: 0o755, compressionMethod: .none,
-                                     bufferSize: 4096, progress: nil) { _, _ in Data() }
+                try archive.addEntry(with: item.path + "/", type: Entry.EntryType.directory,
+                                     uncompressedSize: Int64(0), modificationDate: Date(),
+                                     permissions: UInt16(0o755), compressionMethod: CompressionMethod.none,
+                                     bufferSize: 4096, progress: nil,
+                                     provider: { (_: Int, _: Int) throws -> Data in Data() })
             } else {
                 let attrs = (try? fm.attributesOfItem(atPath: item.url.path)) ?? [:]
                 let size = (attrs[.size] as? NSNumber)?.int64Value ?? 0
                 let perms: UInt16 = MachOSigner.isMachO(item.url) ? 0o755 : 0o644
-                try archive.addEntry(with: item.path, type: .file,
-                                     uncompressedSize: size, modificationDate: Date(),
-                                     permissions: perms, compressionMethod: .deflate,
-                                     bufferSize: 1 << 20, progress: nil) { position, length in
+                try archive.addEntry(with: item.path, type: Entry.EntryType.file,
+                                     uncompressedSize: Int64(size), modificationDate: Date(),
+                                     permissions: UInt16(perms), compressionMethod: CompressionMethod.deflate,
+                                     bufferSize: 1 << 20, progress: nil,
+                                     provider: { (position: Int, length: Int) throws -> Data in
                     guard let h = try? FileHandle(forReadingFrom: item.url) else { return Data() }
                     defer { try? h.close() }
                     try? h.seek(toOffset: UInt64(position))
                     return h.readData(ofLength: length)
-                }
+                })
             }
         }
     }
