@@ -109,7 +109,7 @@ enum CodeSignCMS {
 
         var error: Unmanaged<CFError>?
         guard let sigData = SecKeyCreateSignature(signer.privateKey, algorithm,
-                                                  Data(attrsDER), &error) as Data? else {
+                                                  Data(attrsDER) as CFData, &error) as Data? else {
             let msg = (error?.takeRetainedValue()).map { String(describing: $0) } ?? "未知错误"
             throw SignError.cmsFailed(msg)
         }
