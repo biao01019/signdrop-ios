@@ -23,7 +23,7 @@ jobs:
 
       - name: Build .app (unsigned, device)
         run: |
-          set -o pipefail
+          set -uo pipefail
           xcodebuild -project Signdrop.xcodeproj \
             -scheme Signdrop \
             -configuration Release \
@@ -31,7 +31,23 @@ jobs:
             -destination 'generic/platform=iOS' \
             -derivedDataPath build \
             CODE_SIGNING_ALLOWED=NO CODE_SIGN_IDENTITY="" CODE_SIGN_ENTITLEMENTS="" \
-            build 2>&1 | tee build.log | tail -40
+            build > build.log 2>&1
+          STATUS=$?
+          echo "===== ERRORS ====="
+          grep -nE "error:" build.log | head -60 || true
+          echo "===== LAST 30 LINES ====="
+          tail -30 build.log || true
+          echo "===== /ERRORS ====="
+          grep -q "BUILD SUCCEEDED" build.log || exit 1
+          test $STATUS -eq 0 || exit 1
+
+      - name: Upload build log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-log
+          path: build.log
+          if-no-files-found: ignore
 
       - name: Package IPA
         run: |
