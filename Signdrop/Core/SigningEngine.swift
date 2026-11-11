@@ -409,7 +409,7 @@ final class SigningEngine: ObservableObject {
         for item in items {
             if item.isDir {
                 try archive.addEntry(with: item.path + "/", type: Entry.EntryType.directory,
-                                     uncompressedSize: Int64(0), modificationDate: Date(),
+                                     uncompressedSize: UInt32(0), modificationDate: Date(),
                                      permissions: UInt16(0o755), compressionMethod: CompressionMethod.none,
                                      bufferSize: 4096, progress: nil,
                                      provider: { (_: Int, _: Int) throws -> Data in Data() })
@@ -418,7 +418,7 @@ final class SigningEngine: ObservableObject {
                 let size = (attrs[.size] as? NSNumber)?.int64Value ?? 0
                 let perms: UInt16 = MachOSigner.isMachO(item.url) ? 0o755 : 0o644
                 try archive.addEntry(with: item.path, type: Entry.EntryType.file,
-                                     uncompressedSize: Int64(size), modificationDate: Date(),
+                                     uncompressedSize: UInt32(truncatingIfNeeded: size), modificationDate: Date(),
                                      permissions: UInt16(perms), compressionMethod: CompressionMethod.deflate,
                                      bufferSize: 1 << 20, progress: nil,
                                      provider: { (position: Int, length: Int) throws -> Data in
